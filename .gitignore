@@ -1,0 +1,12 @@
+.env
+logs/
+__pycache__/
+*.pyc
+*.pyo
+*.lock
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+ngrok.exe
