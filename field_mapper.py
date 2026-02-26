@@ -184,6 +184,27 @@ def _extract_option(variant: dict, option_name: str) -> str:
     return ""
 
 
+def _adjust_price(price, adjustment_pct: float = 0) -> float | None:
+    """Apply a percentage adjustment to a price value.
+
+    Args:
+        price: Original price (str, float, or None)
+        adjustment_pct: Percentage to adjust (e.g. 20 = +20%, -10 = -10%)
+
+    Returns:
+        Adjusted price as float, or None if input is None.
+    """
+    if price is None:
+        return None
+    try:
+        p = float(price)
+    except (ValueError, TypeError):
+        return None
+    if adjustment_pct:
+        p = p * (1 + adjustment_pct / 100)
+    return round(p, 2)
+
+
 def _format_price(price) -> str:
     """Ensure price is formatted as a string with 2 decimal places."""
     if price is None:
@@ -210,6 +231,7 @@ def map_variant_to_buyable(
     sql_fields: dict,
     product_status: str,
     metafields: list = None,
+    price_adjustment_pct: float = 0,
 ) -> dict:
     """
     Transform a single Shopify variant into a Rithum BuyableProduct entry.
@@ -245,9 +267,9 @@ def map_variant_to_buyable(
     # UPC / barcode
     fields.append({"Name": "upc", "Value": variant.get("barcode") or None})
 
-    # Price
-    price = variant.get("price")
-    compare_at = variant.get("compareAtPrice")
+    # Price (apply adjustment if configured)
+    price = _adjust_price(variant.get("price"), price_adjustment_pct)
+    compare_at = _adjust_price(variant.get("compareAtPrice"), price_adjustment_pct)
     fields.append({"Name": "price", "Value": _format_price(price)})
     fields.append({"Name": "special_price", "Value": _format_price(compare_at)})
 
@@ -291,6 +313,7 @@ def map_variant_to_buyable(
 def build_quantity_price_payload(
     product: dict,
     metafields: list,
+    price_adjustment_pct: float = 0,
 ) -> dict:
     """
     Build a lightweight payload for the /quantityprice endpoint.
@@ -310,11 +333,11 @@ def build_quantity_price_payload(
         fields = []
         fields.append({"Name": "is_returnable", "Value": "Returnable"})
 
-        price = variant.get("price")
+        price = _adjust_price(variant.get("price"), price_adjustment_pct)
         if price is not None:
             fields.append({"Name": "price", "Value": _format_price(price)})
 
-        compare_at = variant.get("compareAtPrice")
+        compare_at = _adjust_price(variant.get("compareAtPrice"), price_adjustment_pct)
         if compare_at is not None:
             fields.append({"Name": "special_price", "Value": _format_price(compare_at)})
 
@@ -367,6 +390,7 @@ def build_bluefly_payload(
     product: dict,
     metafields: list,
     sql_field_map: dict,
+    price_adjustment_pct: float = 0,
 ) -> dict:
     """
     Build the complete Rithum API body for one product.
@@ -401,6 +425,7 @@ def build_bluefly_payload(
             sql_fields=sql_fields,
             product_status=product_status,
             metafields=metafields,
+            price_adjustment_pct=price_adjustment_pct,
         )
         # Strip null-valued fields from variant too
         buyable["Fields"] = [

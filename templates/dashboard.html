@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bluefly Sync Dashboard</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --surface: #ffffff;
+    --surface2: #f8f9fa;
+    --border: #e5e7eb;
+    --text: #111827;
+    --text-muted: #6b7280;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --success: #16a34a;
+    --success-bg: #f0fdf4;
+    --error: #dc2626;
+    --error-bg: #fef2f2;
+    --warning: #d97706;
+    --warning-bg: #fffbeb;
+    --gray-badge: #6b7280;
+    --gray-badge-bg: #f3f4f6;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #ffffff;
+    color: var(--text);
+    line-height: 1.5;
+  }
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    background: #ffffff;
+    border-bottom: 1px solid var(--border);
+  }
+  .header h1 { font-size: 18px; font-weight: 600; color: #111827; }
+  .header .subtitle { font-size: 13px; color: var(--text-muted); }
+
+  /* Tabs */
+  .tabs {
+    display: flex;
+    background: #ffffff;
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    gap: 0;
+  }
+  .tab-btn {
+    padding: 12px 20px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-muted);
+    font-size: 14px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+  /* Tab content */
+  .tab-content { display: none; padding: 24px; }
+  .tab-content.active { display: block; }
+
+  /* Cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .card .label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .card .value { font-size: 28px; font-weight: 700; margin-top: 4px; }
+  .card .value.success { color: var(--success); }
+  .card .value.error { color: var(--error); }
+  .card .value.warning { color: var(--warning); }
+
+  /* Buttons */
+  .btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all .15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn-primary { background: var(--primary); color: #fff; }
+  .btn-primary:hover { background: var(--primary-hover); }
+  .btn-success { background: var(--success); color: #fff; }
+  .btn-danger { background: var(--error); color: #fff; }
+  .btn-outline { background: #ffffff; border: 1px solid var(--border); color: var(--text); }
+  .btn-outline:hover { border-color: var(--text-muted); background: #f9fafb; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Toolbar */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .toolbar input, .toolbar select {
+    padding: 8px 12px;
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+  }
+  .toolbar input:focus, .toolbar select:focus { outline: none; border-color: var(--primary); }
+
+  /* Section headings */
+  .section-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    margin-top: 8px;
+  }
+  .section-heading h3 {
+    font-size: 15px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .section-heading .count {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    background: #f3f4f6;
+    padding: 2px 8px;
+    border-radius: 10px;
+  }
+
+  /* Tables */
+  .table-wrap {
+    overflow-x: auto;
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 24px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left;
+    padding: 12px 16px;
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+    background: #f9fafb;
+    white-space: nowrap;
+  }
+  td {
+    padding: 10px 16px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover { background: #f9fafb; }
+
+  /* Badges */
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+  .badge-success { background: var(--success-bg); color: var(--success); }
+  .badge-error { background: var(--error-bg); color: var(--error); }
+  .badge-gray { background: var(--gray-badge-bg); color: var(--gray-badge); }
+  .badge-warning { background: var(--warning-bg); color: var(--warning); }
+  .badge-info { background: #eff6ff; color: var(--primary); }
+
+  /* Product image */
+  .prod-img {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    object-fit: cover;
+    background: #f3f4f6;
+  }
+  .prod-img-placeholder {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    background: #f3f4f6;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: 16px;
+  }
+
+  /* Settings form */
+  .settings-group {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    margin-bottom: 16px;
+    max-width: 600px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .settings-group h3 { font-size: 15px; margin-bottom: 16px; }
+  .form-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .form-row label { font-size: 13px; min-width: 160px; color: var(--text-muted); }
+  .form-row input {
+    padding: 8px 12px;
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 14px;
+    width: 120px;
+  }
+  .form-row input:focus { outline: none; border-color: var(--primary); }
+  .preview-text { font-size: 13px; color: var(--text-muted); margin-top: 8px; }
+  .info-row { display: flex; gap: 8px; font-size: 13px; margin-bottom: 6px; }
+  .info-label { color: var(--text-muted); min-width: 140px; }
+
+  /* Iframe */
+  .iframe-wrap {
+    width: 100%;
+    height: calc(100vh - 160px);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .iframe-wrap iframe { width: 100%; height: 100%; border: none; }
+
+  /* Toast */
+  .toast-container { position: fixed; top: 20px; right: 20px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
+  .toast {
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    animation: slideIn 0.3s ease;
+    max-width: 400px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.10);
+  }
+  .toast-success { background: #16a34a; color: #fff; }
+  .toast-error { background: #dc2626; color: #fff; }
+  @keyframes slideIn { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
+
+  /* Progress bar */
+  .progress-bar { background: #f3f4f6; height: 6px; border-radius: 3px; overflow: hidden; margin-bottom: 12px; }
+  .progress-bar .fill { height: 100%; background: var(--primary); transition: width 0.3s; }
+
+  /* Spinner */
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(0,0,0,0.08); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Log/stream output */
+  .stream-log {
+    background: #f9fafb;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    max-height: 300px;
+    overflow-y: auto;
+    font-family: 'Menlo', 'Consolas', monospace;
+    font-size: 12px;
+    line-height: 1.8;
+    display: none;
+  }
+  .stream-log .log-line { padding: 2px 0; }
+  .stream-log .log-success { color: var(--success); }
+  .stream-log .log-error { color: var(--error); }
+  .stream-log .log-info { color: var(--primary); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>Bluefly Sync Dashboard</h1>
+    <div class="subtitle">Shopify to Bluefly/Rithum Product Pipeline</div>
+  </div>
+  <div style="font-size:12px; color:var(--text-muted);" id="header-info"></div>
+</div>
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="home">Dashboard</button>
+  <button class="tab-btn" data-tab="products">Products</button>
+  <button class="tab-btn" data-tab="events">Events</button>
+  <button class="tab-btn" data-tab="mapping">Mapping Settings</button>
+  <button class="tab-btn" data-tab="settings">Settings</button>
+</div>
+
+<!-- ============ TAB: Dashboard (Home) ============ -->
+<div id="tab-home" class="tab-content active">
+  <div class="cards">
+    <div class="card">
+      <div class="label">Unread Events</div>
+      <div class="value warning" id="stat-unread">--</div>
+    </div>
+    <div class="card">
+      <div class="label">Errors</div>
+      <div class="value error" id="stat-errors">--</div>
+    </div>
+    <div class="card">
+      <div class="label">Eligible Products</div>
+      <div class="value" id="stat-eligible">--</div>
+    </div>
+    <div class="card">
+      <div class="label">Synced (Pushed)</div>
+      <div class="value success" id="stat-synced">--</div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <button class="btn btn-primary" onclick="processEvents()">
+      Process Pending Events
+    </button>
+    <button class="btn btn-outline" onclick="loadDashboard()">
+      Refresh Stats
+    </button>
+  </div>
+  <div id="home-log" class="stream-log"></div>
+</div>
+
+<!-- ============ TAB: Products ============ -->
+<div id="tab-products" class="tab-content">
+  <div class="toolbar">
+    <input type="text" id="product-search" placeholder="Search products..." oninput="filterProducts()">
+    <button class="btn btn-primary" onclick="loadProducts()">
+      Refresh
+    </button>
+    <button class="btn btn-success" id="bulk-push-btn" onclick="bulkPush()">
+      Push All Unpushed
+    </button>
+    <span id="product-count" style="font-size:13px; color:var(--text-muted);"></span>
+  </div>
+
+  <div id="bulk-progress" style="display:none;">
+    <div class="progress-bar"><div class="fill" id="bulk-fill" style="width:0%"></div></div>
+    <div id="bulk-status" style="font-size:13px; color:var(--text-muted); margin-bottom:12px;"></div>
+  </div>
+  <div id="bulk-log" class="stream-log"></div>
+
+  <!-- Published to Bluefly -->
+  <div class="section-heading">
+    <h3>Published to Bluefly <span class="count" id="published-count">0</span></h3>
+  </div>
+  <div class="table-wrap" id="published-table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>Title</th>
+          <th>Vendor</th>
+          <th>Category</th>
+          <th>Variants</th>
+          <th>Price</th>
+          <th>Qty</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="published-tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- Not Published to Bluefly -->
+  <div class="section-heading">
+    <h3>Not Published to Bluefly <span class="count" id="unpublished-count">0</span></h3>
+  </div>
+  <div class="table-wrap" id="unpublished-table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>Title</th>
+          <th>Vendor</th>
+          <th>Category</th>
+          <th>Variants</th>
+          <th>Price</th>
+          <th>Qty</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="unpublished-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ============ TAB: Events ============ -->
+<div id="tab-events" class="tab-content">
+  <div class="toolbar">
+    <input type="date" id="event-date" onchange="loadEvents()">
+    <select id="event-status" onchange="loadEvents()">
+      <option value="">All Statuses</option>
+      <option value="unread">Unread</option>
+      <option value="processing">Processing</option>
+      <option value="processed">Processed</option>
+      <option value="error">Error</option>
+    </select>
+    <button class="btn btn-primary" onclick="processEvents()">
+      Scan &amp; Process
+    </button>
+    <button class="btn btn-outline" onclick="loadEvents()">
+      Refresh
+    </button>
+    <span id="event-count" style="font-size:13px; color:var(--text-muted);"></span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Topic</th>
+          <th>Product ID</th>
+          <th>Status</th>
+          <th>Event ID</th>
+        </tr>
+      </thead>
+      <tbody id="events-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ============ TAB: Mapping Settings ============ -->
+<div id="tab-mapping" class="tab-content">
+  <div class="iframe-wrap">
+    <iframe src="http://3.150.206.227/bluefly/conversion" title="Bluefly Mapping Tool"></iframe>
+  </div>
+</div>
+
+<!-- ============ TAB: Settings ============ -->
+<div id="tab-settings" class="tab-content">
+  <div class="settings-group">
+    <h3>Price Adjustment</h3>
+    <div class="form-row">
+      <label>Adjustment (%)</label>
+      <input type="number" id="price-adj" step="0.1" value="0">
+      <button class="btn btn-primary btn-sm" onclick="saveSettings()">Save</button>
+    </div>
+    <div class="preview-text" id="price-preview">
+      A $100.00 Shopify price becomes <strong>$100.00</strong> on Bluefly
+    </div>
+  </div>
+
+  <div class="settings-group">
+    <h3>System Info</h3>
+    <div class="info-row"><span class="info-label">Shopify Store:</span> <span id="info-store">--</span></div>
+    <div class="info-row"><span class="info-label">Bluefly Seller ID:</span> <span id="info-seller">--</span></div>
+    <div class="info-row"><span class="info-label">Webhook Log Dir:</span> <span id="info-logdir">--</span></div>
+    <div class="info-row"><span class="info-label">Pipeline Log Dir:</span> <span id="info-pipedir">--</span></div>
+  </div>
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+
+<script>
+// -----------------------------------------------------------------------
+// Tab switching
+// -----------------------------------------------------------------------
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+
+    const tab = btn.dataset.tab;
+    if (tab === 'home') loadDashboard();
+    if (tab === 'products') loadProducts();
+    if (tab === 'events') loadEvents();
+    if (tab === 'settings') loadSettings();
+  });
+});
+
+// -----------------------------------------------------------------------
+// Toast notifications
+// -----------------------------------------------------------------------
+function toast(msg, type = 'success') {
+  const container = document.getElementById('toast-container');
+  const el = document.createElement('div');
+  el.className = 'toast toast-' + type;
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+// -----------------------------------------------------------------------
+// Dashboard / Home
+// -----------------------------------------------------------------------
+let _allProducts = [];
+
+async function loadDashboard() {
+  try {
+    const [prodRes, eventRes, jobRes] = await Promise.all([
+      fetch('/api/products'),
+      fetch('/api/events?status=unread'),
+      fetch('/api/pipeline/jobs'),
+    ]);
+    const prodData = await prodRes.json();
+    const eventData = await eventRes.json();
+    const jobData = await jobRes.json();
+
+    const products = prodData.products || [];
+    const unread = eventData.events || [];
+    const jobs = jobData.jobs || [];
+
+    const synced = products.filter(p => p.sync_status === 'pushed').length;
+    const errors = jobs.filter(j => j.status === 'error').length;
+
+    document.getElementById('stat-unread').textContent = unread.length;
+    document.getElementById('stat-errors').textContent = errors;
+    document.getElementById('stat-eligible').textContent = products.length;
+    document.getElementById('stat-synced').textContent = synced;
+  } catch (e) {
+    toast('Failed to load dashboard: ' + e.message, 'error');
+  }
+}
+
+// -----------------------------------------------------------------------
+// Products (split into Published / Not Published)
+// -----------------------------------------------------------------------
+async function loadProducts() {
+  const pubBody = document.getElementById('published-tbody');
+  const unpubBody = document.getElementById('unpublished-tbody');
+  const loadingRow = '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text-muted)"><span class="spinner"></span> Loading products...</td></tr>';
+  pubBody.innerHTML = loadingRow;
+  unpubBody.innerHTML = loadingRow;
+
+  try {
+    const res = await fetch('/api/products');
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    _allProducts = data.products || [];
+    document.getElementById('product-count').textContent = _allProducts.length + ' eligible products';
+    renderSplitProducts(_allProducts);
+  } catch (e) {
+    const errRow = '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--error)">' + e.message + '</td></tr>';
+    pubBody.innerHTML = errRow;
+    unpubBody.innerHTML = errRow;
+  }
+}
+
+function filterProducts() {
+  const q = document.getElementById('product-search').value.toLowerCase();
+  const filtered = _allProducts.filter(p =>
+    p.title.toLowerCase().includes(q) ||
+    p.vendor.toLowerCase().includes(q) ||
+    (p.first_sku || '').toLowerCase().includes(q) ||
+    String(p.id).includes(q)
+  );
+  renderSplitProducts(filtered);
+}
+
+function renderSplitProducts(products) {
+  const published = products.filter(p => p.sync_status === 'pushed');
+  const unpublished = products.filter(p => p.sync_status !== 'pushed');
+
+  document.getElementById('published-count').textContent = published.length;
+  document.getElementById('unpublished-count').textContent = unpublished.length;
+
+  renderProductTable('published-tbody', published, true);
+  renderProductTable('unpublished-tbody', unpublished, false);
+}
+
+function renderProductTable(tbodyId, products, isPublished) {
+  const tbody = document.getElementById(tbodyId);
+  if (!products.length) {
+    const msg = isPublished ? 'No products published to Bluefly yet' : 'All eligible products are published';
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--text-muted)">${msg}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = products.map(p => {
+    const img = p.image_url
+      ? `<img src="${p.image_url}&width=80" class="prod-img" loading="lazy">`
+      : '<div class="prod-img-placeholder">?</div>';
+
+    let statusBadge;
+    if (p.sync_status === 'pushed') statusBadge = '<span class="badge badge-success">Pushed</span>';
+    else if (p.sync_status === 'error') statusBadge = '<span class="badge badge-error">Error</span>';
+    else if (p.sync_status === 'skipped') statusBadge = '<span class="badge badge-warning">Skipped</span>';
+    else statusBadge = '<span class="badge badge-gray">Never</span>';
+
+    const actions = isPublished
+      ? `<button class="btn btn-primary btn-sm" onclick="pushProduct(${p.id})" title="Re-push to Bluefly">Re-push</button>
+         <button class="btn btn-danger btn-sm" onclick="setDraft(${p.id})" title="Set NotLive on Bluefly">Draft</button>`
+      : `<button class="btn btn-primary btn-sm" onclick="pushProduct(${p.id})" title="Push to Bluefly">Push</button>`;
+
+    return `<tr>
+      <td>${img}</td>
+      <td><strong>${esc(p.title)}</strong><br><span style="font-size:11px;color:var(--text-muted)">ID: ${p.id}</span></td>
+      <td>${esc(p.vendor)}</td>
+      <td>${esc(p.bluefly_category || '-')}</td>
+      <td>${p.variant_count}</td>
+      <td>${p.first_price ? '$' + parseFloat(p.first_price).toFixed(2) : '-'}</td>
+      <td>${p.total_quantity}</td>
+      <td>${statusBadge}</td>
+      <td style="white-space:nowrap;">${actions}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function pushProduct(productId) {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    const res = await fetch('/api/products/push', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({product_id: productId}),
+    });
+    const data = await res.json();
+    if (data.success) {
+      toast(`Pushed: ${data.product_title}`);
+      loadProducts();
+    } else {
+      toast(data.error || 'Push failed', 'error');
+    }
+  } catch (e) {
+    toast('Push error: ' + e.message, 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = 'Push';
+}
+
+async function setDraft(productId) {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    const res = await fetch('/api/products/set-status', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({product_id: productId, status: 'NotLive'}),
+    });
+    const data = await res.json();
+    if (data.success) {
+      toast(`Drafted: ${data.product_title}`);
+    } else {
+      toast(data.error || 'Draft failed', 'error');
+    }
+  } catch (e) {
+    toast('Draft error: ' + e.message, 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = 'Draft';
+}
+
+async function bulkPush() {
+  const btn = document.getElementById('bulk-push-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Pushing...';
+
+  const progressEl = document.getElementById('bulk-progress');
+  const fillEl = document.getElementById('bulk-fill');
+  const statusEl = document.getElementById('bulk-status');
+  const logEl = document.getElementById('bulk-log');
+  progressEl.style.display = 'block';
+  logEl.style.display = 'block';
+  logEl.innerHTML = '';
+  fillEl.style.width = '0%';
+
+  try {
+    const res = await fetch('/api/products/push-bulk', {method: 'POST'});
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'start') {
+            statusEl.textContent = `Pushing 0 / ${msg.total}...`;
+          } else if (msg.type === 'success') {
+            const pct = Math.round((msg.index / msg.total) * 100);
+            fillEl.style.width = pct + '%';
+            statusEl.textContent = `Pushing ${msg.index} / ${msg.total}...`;
+            logEl.innerHTML += `<div class="log-line log-success">OK ${esc(msg.title)} (${msg.product_id})</div>`;
+          } else if (msg.type === 'error') {
+            logEl.innerHTML += `<div class="log-line log-error">ERR ${msg.product_id}: ${esc(msg.error)}</div>`;
+          } else if (msg.type === 'skip') {
+            logEl.innerHTML += `<div class="log-line log-info">SKIP ${msg.product_id}: ${esc(msg.reason)}</div>`;
+          } else if (msg.type === 'complete') {
+            fillEl.style.width = '100%';
+            statusEl.textContent = `Complete: ${msg.success} pushed, ${msg.errors} errors`;
+            toast(`Bulk push complete: ${msg.success} pushed, ${msg.errors} errors`);
+          }
+          logEl.scrollTop = logEl.scrollHeight;
+        } catch (e) {}
+      }
+    }
+  } catch (e) {
+    toast('Bulk push error: ' + e.message, 'error');
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = 'Push All Unpushed';
+  loadProducts();
+}
+
+// -----------------------------------------------------------------------
+// Events
+// -----------------------------------------------------------------------
+async function loadEvents() {
+  const tbody = document.getElementById('events-tbody');
+  tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--text-muted)"><span class="spinner"></span> Loading...</td></tr>';
+
+  const date = document.getElementById('event-date').value;
+  const status = document.getElementById('event-status').value;
+
+  let url = '/api/events?';
+  if (date) url += 'date=' + date + '&';
+  if (status) url += 'status=' + status;
+
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    const events = data.events || [];
+    document.getElementById('event-count').textContent = events.length + ' events';
+
+    if (!events.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--text-muted)">No events found</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = events.map(ev => {
+      let badge;
+      if (ev.status === 'processed') badge = '<span class="badge badge-success">Processed</span>';
+      else if (ev.status === 'error') badge = '<span class="badge badge-error">Error</span>';
+      else if (ev.status === 'unread') badge = '<span class="badge badge-warning">Unread</span>';
+      else if (ev.status === 'processing') badge = '<span class="badge badge-info">Processing</span>';
+      else badge = `<span class="badge badge-gray">${esc(ev.status)}</span>`;
+
+      const time = ev.timestamp ? new Date(ev.timestamp).toLocaleString() : '-';
+
+      return `<tr>
+        <td>${time}</td>
+        <td><code style="background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:12px;">${esc(ev.topic)}</code></td>
+        <td>${ev.product_id || '-'}</td>
+        <td>${badge}</td>
+        <td style="font-size:11px;color:var(--text-muted)">${esc(ev.event_id || '-')}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--error)">' + e.message + '</td></tr>';
+  }
+}
+
+async function processEvents() {
+  try {
+    const res = await fetch('/api/events/process', {method: 'POST'});
+    const data = await res.json();
+    if (data.error) {
+      toast(data.error, 'error');
+    } else {
+      toast(data.message);
+      setTimeout(() => {
+        loadDashboard();
+        loadEvents();
+      }, 2000);
+    }
+  } catch (e) {
+    toast('Process error: ' + e.message, 'error');
+  }
+}
+
+// -----------------------------------------------------------------------
+// Settings
+// -----------------------------------------------------------------------
+async function loadSettings() {
+  try {
+    const res = await fetch('/api/settings');
+    const data = await res.json();
+
+    document.getElementById('price-adj').value = data.price_adjustment_pct || 0;
+    document.getElementById('info-store').textContent = data.store || '-';
+    document.getElementById('info-seller').textContent = data.seller_id || '-';
+    document.getElementById('info-logdir').textContent = data.log_dir || '-';
+    document.getElementById('info-pipedir').textContent = data.pipeline_log_dir || '-';
+
+    updatePricePreview();
+  } catch (e) {
+    toast('Failed to load settings', 'error');
+  }
+}
+
+async function saveSettings() {
+  const adj = parseFloat(document.getElementById('price-adj').value) || 0;
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({price_adjustment_pct: adj}),
+    });
+    const data = await res.json();
+    if (data.success) {
+      toast('Settings saved');
+    } else {
+      toast(data.error || 'Save failed', 'error');
+    }
+  } catch (e) {
+    toast('Save error: ' + e.message, 'error');
+  }
+}
+
+document.getElementById('price-adj').addEventListener('input', updatePricePreview);
+function updatePricePreview() {
+  const adj = parseFloat(document.getElementById('price-adj').value) || 0;
+  const base = 100;
+  const adjusted = (base * (1 + adj / 100)).toFixed(2);
+  document.getElementById('price-preview').innerHTML =
+    `A $${base.toFixed(2)} Shopify price becomes <strong>$${adjusted}</strong> on Bluefly`;
+}
+
+// -----------------------------------------------------------------------
+// Utility
+// -----------------------------------------------------------------------
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+}
+
+// -----------------------------------------------------------------------
+// Init
+// -----------------------------------------------------------------------
+loadDashboard();
+
+const today = new Date().toISOString().split('T')[0];
+document.getElementById('event-date').value = today;
+</script>
+</body>
+</html>

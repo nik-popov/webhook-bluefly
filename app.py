@@ -28,6 +28,11 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# Register the dashboard UI Blueprint
+# Register the dashboard UI Blueprint
+from dashboard.routes import dashboard_bp
+app.register_blueprint(dashboard_bp)
+
 WEBHOOK_SECRET = os.environ.get("SHOPIFY_WEBHOOK_SECRET", "")
 LOG_DIR = os.environ.get("LOG_DIR", "./logs")
 PIPELINE_LOG_DIR = os.environ.get("PIPELINE_LOG_DIR", "./pipeline_logs")
@@ -115,12 +120,25 @@ def _sync_product_to_bluefly(file_path: str, record: dict):
         })
         print(f"[Pipeline] Enriched: '{enriched.get('title')}'")
 
+        category_id = get_metafield(metafields, "custom", "bluefly_category")
+
         if not should_sync_product(enriched):
-            pipeline.update_stage(job_path, "skipped", {"reason": f"status: {enriched.get('status')}"})
+            # Auto-draft: if product was on Bluefly (has category), set NotLive
+            if category_id and bluefly_client:
+                print(f"[Pipeline] Product not ACTIVE -- auto-drafting on Bluefly")
+                try:
+                    qp = build_quantity_price_payload(enriched, metafields)
+                    for bp in qp.get("BuyableProducts", []):
+                        bp["ListingStatus"] = "NotLive"
+                    bluefly_client.update_quantity_price([qp])
+                    pipeline.update_stage(job_path, "pushed", {"action": "auto-draft", "status": "NotLive"})
+                except Exception as draft_err:
+                    print(f"[Pipeline] Auto-draft failed: {draft_err}")
+            else:
+                pipeline.update_stage(job_path, "skipped", {"reason": f"status: {enriched.get('status')}"})
             tx_logger.update_status(file_path, "processed")
             return
 
-        category_id = get_metafield(metafields, "custom", "bluefly_category")
         if not category_id:
             print(f"[Pipeline] No bluefly_category -- skipping")
             pipeline.update_stage(job_path, "skipped", {"reason": "no bluefly_category"})
@@ -140,10 +158,19 @@ def _sync_product_to_bluefly(file_path: str, record: dict):
         except Exception as e:
             print(f"[Pipeline] SQL lookup skipped: {e}")
 
+        # Read price adjustment from config.json
+        _cfg = {}
+        try:
+            import dashboard.routes as _dr
+            _cfg = _dr.load_config()
+        except Exception:
+            pass
+        _adj = _cfg.get("price_adjustment_pct", 0)
+
         # All product events (create + update) use /v2/products with full payload.
         # This endpoint is an upsert — creates new products or updates all fields
         # (color, size, images, options, etc.) on existing products.
-        bluefly_payload = build_bluefly_payload(enriched, metafields, sql_field_map)
+        bluefly_payload = build_bluefly_payload(enriched, metafields, sql_field_map, price_adjustment_pct=_adj)
 
         pipeline.update_stage(job_path, "mapped", {
             "seller_sku": bluefly_payload.get("SellerSKU"),

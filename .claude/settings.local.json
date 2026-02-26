@@ -17,7 +17,8 @@
       "Bash(git remote add:*)",
       "Bash(git push:*)",
       "Bash(python process_products.py:*)",
-      "mcp__Claude_Preview__preview_start"
+      "mcp__Claude_Preview__preview_start",
+      "Bash(findstr:*)"
     ]
   }
 }
