@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip:*)",
+      "Bash(git init:*)",
+      "Bash(curl:*)",
+      "Bash(python -c:*)",
+      "Bash(taskkill:*)",
+      "Bash(netstat:*)",
+      "Bash(for pid in 68628 93728 107280 96788 106720)",
+      "Bash(do taskkill //F //PID $pid)",
+      "Bash(done)",
+      "Bash(choco install:*)",
+      "Bash(for pid in 96408 113008 69168)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "Bash(python process_products.py:*)",
+      "mcp__Claude_Preview__preview_start"
+    ]
+  }
+}

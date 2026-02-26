@@ -3,3 +3,4 @@ python-dotenv>=1.1
 filelock>=3.16
 gunicorn>=23.0
 waitress>=3.0
+pyodbc>=5.1
