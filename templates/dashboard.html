@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Bluefly Sync Dashboard</title>
+<title>Bluefly Sync</title>
 <style>
   :root {
     --bg: #ffffff;
@@ -134,21 +134,20 @@
   }
   .settings-group {
     background: #ffffff; border: 1px solid var(--border); border-radius: 8px;
-    padding: 24px; margin-bottom: 16px; max-width: 600px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    padding: 24px; margin-bottom: 16px; max-width: 700px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
   }
   .settings-group h3 { font-size: 15px; margin-bottom: 16px; }
   .form-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-  .form-row label { font-size: 13px; min-width: 160px; color: var(--text-muted); }
-  .form-row input {
+  .form-row label { font-size: 13px; min-width: 180px; color: var(--text-muted); }
+  .form-row input, .form-row select {
     padding: 8px 12px; background: #ffffff; border: 1px solid var(--border);
-    border-radius: 6px; color: var(--text); font-size: 14px; width: 120px;
+    border-radius: 6px; color: var(--text); font-size: 14px;
   }
-  .form-row input:focus { outline: none; border-color: var(--primary); }
+  .form-row input[type="number"] { width: 120px; }
+  .form-row input:focus, .form-row select:focus { outline: none; border-color: var(--primary); }
   .preview-text { font-size: 13px; color: var(--text-muted); margin-top: 8px; }
   .info-row { display: flex; gap: 8px; font-size: 13px; margin-bottom: 6px; }
   .info-label { color: var(--text-muted); min-width: 140px; }
-  .iframe-wrap { width: 100%; height: calc(100vh - 160px); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  .iframe-wrap iframe { width: 100%; height: 100%; border: none; }
   .toast-container { position: fixed; top: 20px; right: 20px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
   .toast {
     padding: 12px 20px; border-radius: 8px; font-size: 13px; font-weight: 500;
@@ -170,7 +169,6 @@
   .stream-log .log-success { color: var(--success); }
   .stream-log .log-error { color: var(--error); }
   .stream-log .log-info { color: var(--primary); }
-  /* Pagination */
   .pagination {
     display: flex; align-items: center; justify-content: space-between;
     padding: 12px 16px; border-top: 1px solid var(--border); background: #f9fafb;
@@ -185,21 +183,36 @@
   .pagination .page-controls button:hover:not(:disabled) { background: #f3f4f6; }
   .pagination .page-controls button:disabled { opacity: 0.4; cursor: not-allowed; }
   .pagination .page-controls button.active { background: var(--primary); color: #fff; border-color: var(--primary); }
-  .pagination select { padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px; background: #fff; }
-  /* Empty / loading states */
   .empty-state { text-align: center; padding: 48px 24px; color: var(--text-muted); }
-  .empty-state .empty-icon { font-size: 32px; margin-bottom: 8px; opacity: 0.4; }
   .empty-state .empty-text { font-size: 14px; }
   .loading-state { text-align: center; padding: 48px 24px; color: var(--text-muted); }
   .loading-state .spinner { width: 24px; height: 24px; margin-bottom: 12px; }
   .loading-state .loading-text { font-size: 14px; }
-  /* Error banner */
   .error-banner {
     background: var(--error-bg); border: 1px solid #fecaca; border-radius: 8px;
     padding: 12px 16px; margin-bottom: 16px; font-size: 13px; color: var(--error);
     display: none;
   }
   .error-banner.visible { display: block; }
+  /* Checkbox toggle */
+  .toggle-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .toggle-row label { font-size: 13px; color: var(--text); cursor: pointer; display: flex; align-items: center; gap: 8px; }
+  .toggle-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--primary); }
+  .toggle-row .hint { font-size: 11px; color: var(--text-muted); }
+  /* Source badge */
+  .source-badge {
+    display: inline-block; padding: 1px 6px; border-radius: 4px;
+    font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
+  }
+  .source-badge.metafield { background: #dbeafe; color: #1d4ed8; }
+  .source-badge.product { background: #d1fae5; color: #065f46; }
+  .source-badge.tag_parse { background: #fef3c7; color: #92400e; }
+  .source-badge.option { background: #e0e7ff; color: #3730a3; }
+  .source-badge.variant { background: #fce7f3; color: #9d174d; }
+  .source-badge.default { background: #f3f4f6; color: #374151; }
+  .source-badge.auto { background: #f0fdf4; color: #166534; }
+  .link-external { color: var(--primary); text-decoration: none; font-size: 13px; font-weight: 500; }
+  .link-external:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -216,7 +229,7 @@
   <button class="tab-btn active" data-tab="home">Dashboard</button>
   <button class="tab-btn" data-tab="products">Products</button>
   <button class="tab-btn" data-tab="events">Events</button>
-  <button class="tab-btn" data-tab="mapping">Mapping Settings</button>
+  <button class="tab-btn" data-tab="mapping">Field Mapping</button>
   <button class="tab-btn" data-tab="settings">Settings</button>
 </div>
 
@@ -237,8 +250,12 @@
       <div class="value" id="stat-eligible"><span class="spinner"></span></div>
     </div>
     <div class="card">
-      <div class="label">Synced (Pushed)</div>
+      <div class="label">Published (Bluefly)</div>
       <div class="value success" id="stat-synced"><span class="spinner"></span></div>
+    </div>
+    <div class="card">
+      <div class="label">Bluefly Catalog</div>
+      <div class="value" id="stat-catalog" style="color:var(--primary)"><span class="spinner"></span></div>
     </div>
   </div>
 
@@ -256,6 +273,7 @@
     <input type="text" id="product-search" placeholder="Search by title, vendor, SKU, or ID..." style="min-width:260px;" oninput="filterProducts()">
     <button class="btn btn-primary" onclick="loadProducts()">Refresh</button>
     <button class="btn btn-success" id="bulk-push-btn" onclick="bulkPush()">Push All Unpushed</button>
+    <button class="btn btn-outline" onclick="loadBlueflyOnly()">Refresh Bluefly Catalog</button>
     <span id="product-count" style="font-size:13px; color:var(--text-muted);"></span>
   </div>
 
@@ -282,6 +300,23 @@
     <div class="pagination" id="published-pagination"></div>
   </div>
 
+  <!-- Bluefly Catalog (from live API) -->
+  <div class="section-heading">
+    <h3>Bluefly Catalog (Live) <span class="count" id="catalog-count">0</span></h3>
+  </div>
+  <div class="table-wrap" id="catalog-table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Seller SKU</th><th>Name</th><th>Brand</th><th>Category</th>
+          <th>Buyables</th><th>Qty</th><th>Listing Status</th>
+        </tr>
+      </thead>
+      <tbody id="catalog-tbody"></tbody>
+    </table>
+    <div class="pagination" id="catalog-pagination"></div>
+  </div>
+
   <!-- Not Published to Bluefly -->
   <div class="section-heading">
     <h3>Not Published to Bluefly <span class="count" id="unpublished-count">0</span></h3>
@@ -291,7 +326,7 @@
       <thead>
         <tr>
           <th></th><th>Title</th><th>Vendor</th><th>Category</th>
-          <th>Variants</th><th>Bluefly Price</th><th>Qty</th><th>Status</th><th>Actions</th>
+          <th>Variants</th><th>Bluefly Price</th><th>Qty</th><th>Eligible</th><th>Actions</th>
         </tr>
       </thead>
       <tbody id="unpublished-tbody"></tbody>
@@ -327,16 +362,91 @@
   </div>
 </div>
 
-<!-- ============ TAB: Mapping Settings ============ -->
+<!-- ============ TAB: Field Mapping ============ -->
 <div id="tab-mapping" class="tab-content">
-  <div class="iframe-wrap">
-    <iframe src="/proxy/mapping" title="Bluefly Mapping Tool"></iframe>
+  <div id="mapping-error" class="error-banner"></div>
+
+  <div class="toolbar" style="margin-bottom:20px;">
+    <a href="http://3.150.206.227/bluefly/conversion" target="_blank" class="link-external">
+      Open BlueFly Size Conversion Tool &rarr;
+    </a>
+    <button class="btn btn-outline" onclick="loadFieldMapping()">Refresh Mapping</button>
+  </div>
+
+  <!-- Product-Level Fields -->
+  <div class="section-heading">
+    <h3>Product-Level Fields (Shopify &rarr; Bluefly)</h3>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Bluefly Field</th><th>Source</th><th>Shopify Source</th><th>Description</th><th>Required</th></tr>
+      </thead>
+      <tbody id="product-fields-tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- Variant-Level Fields -->
+  <div class="section-heading" style="margin-top:24px;">
+    <h3>Variant-Level Fields (BuyableProduct)</h3>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Bluefly Field</th><th>Source</th><th>Shopify Source</th><th>Default Value</th><th>Description</th></tr>
+      </thead>
+      <tbody id="variant-fields-tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- Color Standard Map -->
+  <div class="section-heading" style="margin-top:24px;">
+    <h3>Color Standardization Map</h3>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Bluefly Standard Color</th><th>Shopify Colors Mapped</th></tr>
+      </thead>
+      <tbody id="color-map-tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- Field Defaults (editable) -->
+  <div class="section-heading" style="margin-top:24px;">
+    <h3>Default Values</h3>
+  </div>
+  <div class="settings-group" id="field-defaults-form">
+    <div class="form-row">
+      <label>Is Returnable</label>
+      <select id="default-is-returnable">
+        <option value="Not Returnable">Not Returnable</option>
+        <option value="Returnable">Returnable</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Product Condition</label>
+      <select id="default-product-condition">
+        <option value="New">New</option>
+        <option value="Used">Used</option>
+        <option value="Refurbished">Refurbished</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Listing Status</label>
+      <select id="default-listing-status">
+        <option value="Live">Live</option>
+        <option value="NotLive">NotLive</option>
+      </select>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="saveFieldDefaults()" style="margin-top:8px;">Save Defaults</button>
   </div>
 </div>
 
 <!-- ============ TAB: Settings ============ -->
 <div id="tab-settings" class="tab-content">
   <div id="settings-error" class="error-banner"></div>
+
   <div class="settings-group">
     <h3>Price Adjustment</h3>
     <div class="form-row">
@@ -347,6 +457,35 @@
     <div class="preview-text" id="price-preview">
       A $100.00 Shopify price becomes <strong>$100.00</strong> on Bluefly
     </div>
+  </div>
+
+  <div class="settings-group">
+    <h3>Eligibility Criteria</h3>
+    <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
+      Products must meet these criteria to appear in the "Not Published but Eligible" table and be pushed to Bluefly.
+    </p>
+    <div class="toggle-row">
+      <label>
+        <input type="checkbox" id="elig-category" checked>
+        Require Bluefly Category
+        <span class="hint">(custom.bluefly_category metafield must be set)</span>
+      </label>
+    </div>
+    <div class="toggle-row">
+      <label>
+        <input type="checkbox" id="elig-quantity" checked>
+        Require Quantity &gt; 0
+        <span class="hint">(total inventory across variants must be positive)</span>
+      </label>
+    </div>
+    <div class="toggle-row">
+      <label>
+        <input type="checkbox" id="elig-images" checked>
+        Require Product Images
+        <span class="hint">(at least one product image must exist)</span>
+      </label>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="saveEligibility()" style="margin-top:8px;">Save Eligibility</button>
   </div>
 
   <div class="settings-group">
@@ -362,7 +501,7 @@
 
 <script>
 // -----------------------------------------------------------------------
-// Core API helper — handles caching, error responses, retries
+// Core API helper
 // -----------------------------------------------------------------------
 const API_BASE = window.location.origin;
 
@@ -385,9 +524,7 @@ async function apiFetch(path, options = {}) {
     throw new Error(`Server returned non-JSON (HTTP ${res.status}). Check that you are on http://localhost:5000`);
   }
   const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error || `HTTP ${res.status}`);
-  }
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
 
@@ -413,12 +550,13 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     if (tab === 'home') loadDashboard();
     if (tab === 'products') loadProducts();
     if (tab === 'events') loadEvents();
+    if (tab === 'mapping') loadFieldMapping();
     if (tab === 'settings') loadSettings();
   });
 });
 
 // -----------------------------------------------------------------------
-// Toast notifications
+// Toast / error helpers
 // -----------------------------------------------------------------------
 function toast(msg, type = 'success') {
   const container = document.getElementById('toast-container');
@@ -442,16 +580,13 @@ function hideError(bannerId) {
 }
 
 // -----------------------------------------------------------------------
-// Loading / empty state helpers
+// Loading / empty / error state helpers
 // -----------------------------------------------------------------------
 function loadingHTML(cols) {
   return `<tr><td colspan="${cols}"><div class="loading-state"><span class="spinner"></span><div class="loading-text">Loading...</div></div></td></tr>`;
 }
 function emptyHTML(cols, msg) {
   return `<tr><td colspan="${cols}"><div class="empty-state"><div class="empty-text">${msg}</div></div></td></tr>`;
-}
-function errorHTML(cols, msg) {
-  return `<tr><td colspan="${cols}"><div class="empty-state"><div class="empty-text" style="color:var(--error)">${esc(msg)}</div></div></td></tr>`;
 }
 
 // -----------------------------------------------------------------------
@@ -466,30 +601,24 @@ function paginate(items, tableKey) {
   const total = items.length;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   if (state.page > totalPages) state.page = totalPages;
-
   const start = (state.page - 1) * PAGE_SIZE;
   const pageItems = items.slice(start, start + PAGE_SIZE);
-
   return { items: pageItems, page: state.page, totalPages, total, start };
 }
 
 function renderPagination(containerId, tableKey, total, page, totalPages, onPageChange) {
   const container = document.getElementById(containerId);
   if (total <= PAGE_SIZE) { container.innerHTML = ''; return; }
-
   const start = (page - 1) * PAGE_SIZE + 1;
   const end = Math.min(page * PAGE_SIZE, total);
-
   let pageButtons = '';
   const maxButtons = 5;
   let startPage = Math.max(1, page - Math.floor(maxButtons / 2));
   let endPage = Math.min(totalPages, startPage + maxButtons - 1);
   if (endPage - startPage < maxButtons - 1) startPage = Math.max(1, endPage - maxButtons + 1);
-
   for (let i = startPage; i <= endPage; i++) {
     pageButtons += `<button class="${i === page ? 'active' : ''}" onclick="${onPageChange}(${i})">${i}</button>`;
   }
-
   container.innerHTML = `
     <div class="page-info">Showing ${start}-${end} of ${total}</div>
     <div class="page-controls">
@@ -505,6 +634,8 @@ function renderPagination(containerId, tableKey, total, page, totalPages, onPage
 // -----------------------------------------------------------------------
 let _allProducts = [];
 let _priceAdj = 0;
+let _eligibility = {};
+let _catalogProducts = [];
 
 async function loadDashboard() {
   hideError('home-error');
@@ -512,17 +643,20 @@ async function loadDashboard() {
   document.getElementById('stat-errors').innerHTML = '<span class="spinner"></span>';
   document.getElementById('stat-eligible').innerHTML = '<span class="spinner"></span>';
   document.getElementById('stat-synced').innerHTML = '<span class="spinner"></span>';
+  document.getElementById('stat-catalog').innerHTML = '<span class="spinner"></span>';
 
   try {
-    const [prodData, eventData, jobData] = await Promise.all([
+    const [prodData, eventData, jobData, catalogData] = await Promise.all([
       apiFetch('/api/products'),
       apiFetch('/api/events?status=unread'),
       apiFetch('/api/pipeline/jobs'),
+      apiFetch('/api/bluefly/catalog').catch(() => ({products:[], total:0})),
     ]);
 
     const products = prodData.products || [];
     const unread = eventData.events || [];
     const jobs = jobData.jobs || [];
+    const catalog = catalogData.products || [];
 
     const synced = products.filter(p => p.sync_status === 'pushed').length;
     const errors = jobs.filter(j => j.status === 'error').length;
@@ -531,17 +665,19 @@ async function loadDashboard() {
     document.getElementById('stat-errors').textContent = errors;
     document.getElementById('stat-eligible').textContent = products.length;
     document.getElementById('stat-synced').textContent = synced;
+    document.getElementById('stat-catalog').textContent = catalog.length;
   } catch (e) {
     showError('home-error', 'Failed to load dashboard: ' + e.message);
     document.getElementById('stat-unread').textContent = '--';
     document.getElementById('stat-errors').textContent = '--';
     document.getElementById('stat-eligible').textContent = '--';
     document.getElementById('stat-synced').textContent = '--';
+    document.getElementById('stat-catalog').textContent = '--';
   }
 }
 
 // -----------------------------------------------------------------------
-// Products (split into Published / Not Published with pagination)
+// Products (Published / Bluefly Catalog / Not Published)
 // -----------------------------------------------------------------------
 let _publishedProducts = [];
 let _unpublishedProducts = [];
@@ -550,24 +686,48 @@ async function loadProducts() {
   hideError('products-error');
   document.getElementById('published-tbody').innerHTML = loadingHTML(9);
   document.getElementById('unpublished-tbody').innerHTML = loadingHTML(9);
-  document.getElementById('published-pagination').innerHTML = '';
-  document.getElementById('unpublished-pagination').innerHTML = '';
+  document.getElementById('catalog-tbody').innerHTML = loadingHTML(7);
   _pageState['published'] = { page: 1 };
   _pageState['unpublished'] = { page: 1 };
+  _pageState['catalog'] = { page: 1 };
 
   try {
-    const data = await apiFetch('/api/products');
+    const [data, catalogData] = await Promise.all([
+      apiFetch('/api/products'),
+      apiFetch('/api/bluefly/catalog').catch(() => ({products:[], total:0})),
+    ]);
     if (data.error) throw new Error(data.error);
 
     _allProducts = data.products || [];
     _priceAdj = data.price_adjustment_pct || 0;
+    _eligibility = data.eligibility || {};
+    _catalogProducts = catalogData.products || [];
+
     const adjLabel = _priceAdj ? ` (${_priceAdj > 0 ? '+' : ''}${_priceAdj}% adj)` : '';
     document.getElementById('product-count').textContent = _allProducts.length + ' eligible products' + adjLabel;
+
     splitAndRender(_allProducts);
+    renderCatalogPage(1);
   } catch (e) {
     showError('products-error', e.message);
     document.getElementById('published-tbody').innerHTML = emptyHTML(9, 'Could not load products');
     document.getElementById('unpublished-tbody').innerHTML = '';
+    document.getElementById('catalog-tbody').innerHTML = '';
+  }
+}
+
+async function loadBlueflyOnly() {
+  document.getElementById('catalog-tbody').innerHTML = loadingHTML(7);
+  _pageState['catalog'] = { page: 1 };
+  try {
+    const catalogData = await apiFetch('/api/bluefly/catalog');
+    _catalogProducts = catalogData.products || [];
+    document.getElementById('catalog-count').textContent = _catalogProducts.length;
+    renderCatalogPage(1);
+    toast('Bluefly catalog refreshed: ' + _catalogProducts.length + ' products');
+  } catch (e) {
+    toast('Failed to load catalog: ' + e.message, 'error');
+    document.getElementById('catalog-tbody').innerHTML = emptyHTML(7, 'Could not load Bluefly catalog');
   }
 }
 
@@ -590,6 +750,7 @@ function splitAndRender(products) {
 
   document.getElementById('published-count').textContent = _publishedProducts.length;
   document.getElementById('unpublished-count').textContent = _unpublishedProducts.length;
+  document.getElementById('catalog-count').textContent = _catalogProducts.length;
 
   renderPublishedPage(_pageState['published'] ? _pageState['published'].page : 1);
   renderUnpublishedPage(_pageState['unpublished'] ? _pageState['unpublished'].page : 1);
@@ -608,9 +769,42 @@ function renderUnpublishedPage(page) {
   if (!_pageState['unpublished']) _pageState['unpublished'] = {};
   _pageState['unpublished'].page = page;
   const paged = paginate(_unpublishedProducts, 'unpublished');
-  renderProductTable('unpublished-tbody', paged.items, false,
+  renderUnpublishedTable('unpublished-tbody', paged.items,
     _unpublishedProducts.length === 0 ? 'All eligible products are published' : '');
   renderPagination('unpublished-pagination', 'unpublished', paged.total, paged.page, paged.totalPages, 'renderUnpublishedPage');
+}
+
+function renderCatalogPage(page) {
+  if (!_pageState['catalog']) _pageState['catalog'] = {};
+  _pageState['catalog'].page = page;
+  const paged = paginate(_catalogProducts, 'catalog');
+  const tbody = document.getElementById('catalog-tbody');
+
+  if (!paged.items.length) {
+    tbody.innerHTML = emptyHTML(7, 'No products in Bluefly catalog');
+    document.getElementById('catalog-pagination').innerHTML = '';
+    return;
+  }
+
+  tbody.innerHTML = paged.items.map(p => {
+    let statusBadge;
+    const ls = (p.listing_status || '').toLowerCase();
+    if (ls === 'live') statusBadge = '<span class="badge badge-success">Live</span>';
+    else if (ls === 'notlive') statusBadge = '<span class="badge badge-gray">NotLive</span>';
+    else statusBadge = `<span class="badge badge-gray">${esc(p.listing_status)}</span>`;
+
+    return `<tr>
+      <td><code style="font-size:11px;">${esc(p.seller_sku)}</code></td>
+      <td><strong>${esc(p.name)}</strong></td>
+      <td>${esc(p.brand)}</td>
+      <td>${esc(p.category)}</td>
+      <td>${p.buyable_count}</td>
+      <td>${p.total_quantity}</td>
+      <td>${statusBadge}</td>
+    </tr>`;
+  }).join('');
+
+  renderPagination('catalog-pagination', 'catalog', paged.total, paged.page, paged.totalPages, 'renderCatalogPage');
 }
 
 function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
@@ -635,7 +829,6 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
          <button class="btn btn-danger btn-sm" onclick="setDraft(${p.id}, this)" title="Set NotLive">Draft</button>`
       : `<button class="btn btn-primary btn-sm" onclick="pushProduct(${p.id}, this)" title="Push to Bluefly">Push</button>`;
 
-    // Show adjusted price (what Bluefly gets) with original as tooltip
     let priceDisplay = '-';
     if (p.adjusted_price != null) {
       priceDisplay = `<strong>$${parseFloat(p.adjusted_price).toFixed(2)}</strong>`;
@@ -656,6 +849,53 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
       <td>${p.total_quantity}</td>
       <td>${statusBadge}</td>
       <td style="white-space:nowrap;">${actions}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderUnpublishedTable(tbodyId, products, emptyMsg) {
+  const tbody = document.getElementById(tbodyId);
+  if (!products.length) {
+    tbody.innerHTML = emptyHTML(9, emptyMsg || 'No products');
+    return;
+  }
+  tbody.innerHTML = products.map(p => {
+    const img = p.image_url
+      ? `<img src="${p.image_url}&width=80" class="prod-img" loading="lazy" onerror="this.outerHTML='<div class=prod-img-placeholder>?</div>'">`
+      : '<div class="prod-img-placeholder">?</div>';
+
+    let priceDisplay = '-';
+    if (p.adjusted_price != null) {
+      priceDisplay = `<strong>$${parseFloat(p.adjusted_price).toFixed(2)}</strong>`;
+      if (p.first_price && _priceAdj) {
+        priceDisplay += `<br><span style="font-size:10px;color:var(--text-muted);text-decoration:line-through;">$${parseFloat(p.first_price).toFixed(2)}</span>`;
+      }
+    } else if (p.first_price) {
+      priceDisplay = '$' + parseFloat(p.first_price).toFixed(2);
+    }
+
+    // Eligibility indicator
+    const issues = [];
+    if (!p.has_images) issues.push('No images');
+    if (!p.has_quantity) issues.push('Qty = 0');
+    const eligBadge = p.push_eligible
+      ? '<span class="badge badge-success">Ready</span>'
+      : `<span class="badge badge-warning" title="${esc(issues.join(', '))}">${esc(issues.join(', ') || 'Ineligible')}</span>`;
+
+    const pushBtn = p.push_eligible
+      ? `<button class="btn btn-primary btn-sm" onclick="pushProduct(${p.id}, this)">Push</button>`
+      : `<button class="btn btn-outline btn-sm" disabled title="${esc(issues.join(', '))}">Ineligible</button>`;
+
+    return `<tr>
+      <td>${img}</td>
+      <td><strong>${esc(p.title)}</strong><br><span style="font-size:11px;color:var(--text-muted)">ID: ${p.id}</span></td>
+      <td>${esc(p.vendor)}</td>
+      <td>${esc(p.bluefly_category || '-')}</td>
+      <td>${p.variant_count}</td>
+      <td>${priceDisplay}</td>
+      <td>${p.total_quantity}</td>
+      <td>${eligBadge}</td>
+      <td style="white-space:nowrap;">${pushBtn}</td>
     </tr>`;
   }).join('');
 }
@@ -700,7 +940,6 @@ async function bulkPush() {
   const btn = document.getElementById('bulk-push-btn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Pushing...';
-
   const progressEl = document.getElementById('bulk-progress');
   const fillEl = document.getElementById('bulk-fill');
   const statusEl = document.getElementById('bulk-status');
@@ -750,7 +989,6 @@ async function bulkPush() {
   } catch (e) {
     toast('Bulk push error: ' + e.message, 'error');
   }
-
   btn.disabled = false;
   btn.innerHTML = 'Push All Unpushed';
   loadProducts();
@@ -804,9 +1042,7 @@ function renderEventsPage(page) {
     else if (ev.status === 'unread') badge = '<span class="badge badge-warning">Unread</span>';
     else if (ev.status === 'processing') badge = '<span class="badge badge-info">Processing</span>';
     else badge = `<span class="badge badge-gray">${esc(ev.status)}</span>`;
-
     const time = ev.timestamp ? new Date(ev.timestamp).toLocaleString() : '-';
-
     return `<tr>
       <td>${time}</td>
       <td><code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:12px;">${esc(ev.topic)}</code></td>
@@ -826,13 +1062,88 @@ async function processEvents() {
       toast(data.error, 'error');
     } else {
       toast(data.message);
-      setTimeout(() => {
-        loadDashboard();
-        loadEvents();
-      }, 2000);
+      setTimeout(() => { loadDashboard(); loadEvents(); }, 2000);
     }
   } catch (e) {
     toast('Process error: ' + e.message, 'error');
+  }
+}
+
+// -----------------------------------------------------------------------
+// Field Mapping
+// -----------------------------------------------------------------------
+async function loadFieldMapping() {
+  hideError('mapping-error');
+  document.getElementById('product-fields-tbody').innerHTML = loadingHTML(5);
+  document.getElementById('variant-fields-tbody').innerHTML = loadingHTML(5);
+
+  try {
+    const data = await apiFetch('/api/field-mapping');
+
+    // Product-level fields table
+    const pfTbody = document.getElementById('product-fields-tbody');
+    pfTbody.innerHTML = (data.product_fields || []).map(f => `<tr>
+      <td><strong>${esc(f.bluefly_field)}</strong></td>
+      <td><span class="source-badge ${f.source_type}">${esc(f.source_type)}</span></td>
+      <td><code style="font-size:11px;">${esc(f.shopify_source)}</code></td>
+      <td>${esc(f.description)}</td>
+      <td>${f.required ? '<span class="badge badge-info">Required</span>' : '<span class="badge badge-gray">Optional</span>'}</td>
+    </tr>`).join('');
+
+    // Variant-level fields table
+    const vfTbody = document.getElementById('variant-fields-tbody');
+    vfTbody.innerHTML = (data.variant_fields || []).map(f => {
+      let defaultCell = '-';
+      if (f.default_value) {
+        defaultCell = `<strong>${esc(f.default_value)}</strong>`;
+        if (f.options) defaultCell += `<br><span style="font-size:10px;color:var(--text-muted)">Options: ${f.options.join(', ')}</span>`;
+      }
+      return `<tr>
+        <td><strong>${esc(f.bluefly_field)}</strong></td>
+        <td><span class="source-badge ${f.source_type.replace(/\/.*/, '')}">${esc(f.source_type)}</span></td>
+        <td><code style="font-size:11px;">${esc(f.shopify_source)}</code></td>
+        <td>${defaultCell}</td>
+        <td>${esc(f.description)}</td>
+      </tr>`;
+    }).join('');
+
+    // Color map
+    const cmTbody = document.getElementById('color-map-tbody');
+    const colorMap = data.color_standard_map || {};
+    cmTbody.innerHTML = Object.entries(colorMap).map(([standard, inputs]) =>
+      `<tr>
+        <td><strong>${esc(standard)}</strong></td>
+        <td>${inputs.map(c => `<code style="background:#f3f4f6;padding:1px 6px;border-radius:3px;font-size:11px;margin:1px 2px;display:inline-block;">${esc(c)}</code>`).join(' ')}</td>
+      </tr>`
+    ).join('');
+
+    // Set defaults form
+    const fd = data.field_defaults || {};
+    document.getElementById('default-is-returnable').value = fd.is_returnable || 'Not Returnable';
+    document.getElementById('default-product-condition').value = fd.product_condition || 'New';
+    document.getElementById('default-listing-status').value = fd.listing_status || 'Live';
+
+  } catch (e) {
+    showError('mapping-error', 'Failed to load field mapping: ' + e.message);
+  }
+}
+
+async function saveFieldDefaults() {
+  const field_defaults = {
+    is_returnable: document.getElementById('default-is-returnable').value,
+    product_condition: document.getElementById('default-product-condition').value,
+    listing_status: document.getElementById('default-listing-status').value,
+  };
+  try {
+    const data = await apiPost('/api/settings', { field_defaults });
+    if (data.success) {
+      toast('Field defaults saved');
+      loadFieldMapping();
+    } else {
+      toast(data.error || 'Save failed', 'error');
+    }
+  } catch (e) {
+    toast('Save error: ' + e.message, 'error');
   }
 }
 
@@ -848,6 +1159,13 @@ async function loadSettings() {
     document.getElementById('info-seller').textContent = data.seller_id || '-';
     document.getElementById('info-logdir').textContent = data.log_dir || '-';
     document.getElementById('info-pipedir').textContent = data.pipeline_log_dir || '-';
+
+    // Eligibility checkboxes
+    const elig = data.eligibility || {};
+    document.getElementById('elig-category').checked = elig.require_category !== false;
+    document.getElementById('elig-quantity').checked = elig.require_quantity !== false;
+    document.getElementById('elig-images').checked = elig.require_images !== false;
+
     updatePricePreview();
   } catch (e) {
     showError('settings-error', 'Failed to load settings: ' + e.message);
@@ -858,8 +1176,23 @@ async function saveSettings() {
   const adj = parseFloat(document.getElementById('price-adj').value) || 0;
   try {
     const data = await apiPost('/api/settings', {price_adjustment_pct: adj});
+    if (data.success) toast('Settings saved');
+    else toast(data.error || 'Save failed', 'error');
+  } catch (e) {
+    toast('Save error: ' + e.message, 'error');
+  }
+}
+
+async function saveEligibility() {
+  const eligibility = {
+    require_category: document.getElementById('elig-category').checked,
+    require_quantity: document.getElementById('elig-quantity').checked,
+    require_images: document.getElementById('elig-images').checked,
+  };
+  try {
+    const data = await apiPost('/api/settings', { eligibility });
     if (data.success) {
-      toast('Settings saved');
+      toast('Eligibility criteria saved');
     } else {
       toast(data.error || 'Save failed', 'error');
     }

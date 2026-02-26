@@ -232,6 +232,7 @@ def map_variant_to_buyable(
     product_status: str,
     metafields: list = None,
     price_adjustment_pct: float = 0,
+    field_defaults: dict = None,
 ) -> dict:
     """
     Transform a single Shopify variant into a Rithum BuyableProduct entry.
@@ -247,6 +248,7 @@ def map_variant_to_buyable(
         BuyableProduct dict matching Rithum API structure.
     """
     metafields = metafields or []
+    field_defaults = field_defaults or {}
     fields = []
 
     # Color — try selectedOptions first, then custom.color metafield
@@ -260,9 +262,11 @@ def map_variant_to_buyable(
     size_value = _extract_option(variant, "size")
     fields.append({"Name": "size", "Value": size_value or None})
 
-    # Defaults
-    fields.append({"Name": "is_returnable", "Value": "Not Returnable"})
-    fields.append({"Name": "product_condition", "Value": "New"})
+    # Defaults — use config-driven values if provided
+    is_returnable = field_defaults.get("is_returnable", "Not Returnable")
+    product_condition = field_defaults.get("product_condition", "New")
+    fields.append({"Name": "is_returnable", "Value": is_returnable})
+    fields.append({"Name": "product_condition", "Value": product_condition})
 
     # UPC / barcode
     fields.append({"Name": "upc", "Value": variant.get("barcode") or None})
@@ -391,6 +395,7 @@ def build_bluefly_payload(
     metafields: list,
     sql_field_map: dict,
     price_adjustment_pct: float = 0,
+    field_defaults: dict = None,
 ) -> dict:
     """
     Build the complete Rithum API body for one product.
@@ -426,6 +431,7 @@ def build_bluefly_payload(
             product_status=product_status,
             metafields=metafields,
             price_adjustment_pct=price_adjustment_pct,
+            field_defaults=field_defaults,
         )
         # Strip null-valued fields from variant too
         buyable["Fields"] = [

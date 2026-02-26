@@ -7,10 +7,12 @@ Provides:
   POST /api/products/push       Push single product to Bluefly
   POST /api/products/push-bulk  Push all unpushed eligible products (NDJSON)
   POST /api/products/set-status Change listing status on Bluefly
+  GET  /api/bluefly/catalog     Fetch live Bluefly catalog
   GET  /api/events              List webhook events
   POST /api/events/process      Trigger processing of unread events
   GET  /api/settings            Read config.json
   POST /api/settings            Update config.json
+  GET  /api/field-mapping       Get field mapping definitions
   GET  /api/pipeline/jobs       List recent pipeline jobs
 """
 
@@ -27,11 +29,27 @@ from field_mapper import (
     get_metafield,
     build_bluefly_payload,
     build_quantity_price_payload,
+    COLOR_STANDARD_MAP,
 )
 
 dashboard_bp = Blueprint("dashboard", __name__)
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
+
+# Default configuration structure
+DEFAULT_CONFIG = {
+    "price_adjustment_pct": 0,
+    "eligibility": {
+        "require_category": True,
+        "require_quantity": True,
+        "require_images": True,
+    },
+    "field_defaults": {
+        "is_returnable": "Not Returnable",
+        "product_condition": "New",
+        "listing_status": "Live",
+    },
+}
 
 
 @dashboard_bp.after_request
@@ -68,9 +86,17 @@ def handle_500(e):
 def load_config() -> dict:
     try:
         with open(CONFIG_PATH, "r") as f:
-            return json.load(f)
+            cfg = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"price_adjustment_pct": 0}
+        cfg = {}
+
+    # Merge with defaults so new keys always exist
+    merged = {**DEFAULT_CONFIG}
+    merged.update(cfg)
+    # Deep merge nested dicts
+    for key in ("eligibility", "field_defaults"):
+        merged[key] = {**DEFAULT_CONFIG.get(key, {}), **cfg.get(key, {})}
+    return merged
 
 
 def save_config(cfg: dict):
@@ -132,16 +158,24 @@ def api_products():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    # Filter to only Bluefly-eligible (have bluefly_category)
-    eligible = [p for p in all_products if p.get("bluefly_category")]
+    cfg = load_config()
+    adj = cfg.get("price_adjustment_pct", 0)
+    elig = cfg.get("eligibility", {})
+    require_category = elig.get("require_category", True)
+    require_quantity = elig.get("require_quantity", True)
+    require_images = elig.get("require_images", True)
+
+    # Filter to eligible products based on configured criteria
+    eligible = []
+    for p in all_products:
+        # Category is always required for Bluefly sync
+        if require_category and not p.get("bluefly_category"):
+            continue
+        eligible.append(p)
 
     # Cross-reference with pipeline logs for sync status
     pipeline_dir = clients["pipeline"].log_dir
     synced_products = _get_synced_product_ids(pipeline_dir)
-
-    # Read price adjustment so we can show adjusted prices
-    cfg = load_config()
-    adj = cfg.get("price_adjustment_pct", 0)
 
     for p in eligible:
         pid = p["id"]
@@ -151,6 +185,17 @@ def api_products():
         else:
             p["sync_status"] = "never"
             p["sync_time"] = None
+
+        # Mark eligibility flags for frontend display
+        p["has_images"] = bool(p.get("image_url"))
+        p["has_quantity"] = (p.get("total_quantity", 0) or 0) > 0
+
+        # Determine if this product meets full eligibility for push
+        p["push_eligible"] = True
+        if require_quantity and not p["has_quantity"]:
+            p["push_eligible"] = False
+        if require_images and not p["has_images"]:
+            p["push_eligible"] = False
 
         # Add adjusted price for display
         try:
@@ -163,6 +208,7 @@ def api_products():
         "products": eligible,
         "total": len(eligible),
         "price_adjustment_pct": adj,
+        "eligibility": elig,
     })
 
 
@@ -224,10 +270,15 @@ def api_push_product():
         except Exception as e:
             print(f"[Dashboard] SQL lookup skipped: {e}")
 
-        # Build payload with price adjustment
+        # Build payload with price adjustment and field defaults
         cfg = load_config()
         adj = cfg.get("price_adjustment_pct", 0)
-        bluefly_payload = build_bluefly_payload(enriched, metafields, sql_field_map, price_adjustment_pct=adj)
+        field_defaults = cfg.get("field_defaults", {})
+        bluefly_payload = build_bluefly_payload(
+            enriched, metafields, sql_field_map,
+            price_adjustment_pct=adj,
+            field_defaults=field_defaults,
+        )
 
         # Create pipeline job
         job_path = pipeline.create_job(
@@ -280,14 +331,23 @@ def api_push_bulk():
             yield json.dumps({"error": str(e)}) + "\n"
             return
 
+        # Apply eligibility filters
+        cfg = load_config()
+        elig = cfg.get("eligibility", {})
+
+        if elig.get("require_quantity", True):
+            eligible = [p for p in eligible if (p.get("total_quantity", 0) or 0) > 0]
+        if elig.get("require_images", True):
+            eligible = [p for p in eligible if p.get("image_url")]
+
         # Check which are already synced
         synced = _get_synced_product_ids(pipeline.log_dir)
         to_push = [p for p in eligible if p["id"] not in synced or synced[p["id"]]["status"] != "pushed"]
 
         yield json.dumps({"type": "start", "total": len(to_push)}) + "\n"
 
-        cfg = load_config()
         adj = cfg.get("price_adjustment_pct", 0)
+        field_defaults = cfg.get("field_defaults", {})
         success_count = 0
         error_count = 0
 
@@ -317,7 +377,11 @@ def api_push_bulk():
                 except Exception:
                     pass
 
-                payload = build_bluefly_payload(enriched, metafields, sql_field_map, price_adjustment_pct=adj)
+                payload = build_bluefly_payload(
+                    enriched, metafields, sql_field_map,
+                    price_adjustment_pct=adj,
+                    field_defaults=field_defaults,
+                )
 
                 job_path = pipeline.create_job(
                     source_file="dashboard-bulk-push",
@@ -412,6 +476,326 @@ def api_set_status():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# -----------------------------------------------------------------------
+# Bluefly Catalog API — GET current catalog from Rithum
+# -----------------------------------------------------------------------
+
+@dashboard_bp.route("/api/bluefly/catalog")
+def api_bluefly_catalog():
+    """Fetch the live Bluefly catalog via GET /v2/products."""
+    clients = _get_clients()
+    bluefly = clients["bluefly"]
+
+    if not bluefly:
+        return jsonify({"error": "Bluefly client not configured"}), 500
+
+    try:
+        result = bluefly.get_catalog()
+
+        if result["success"]:
+            catalog_data = result["data"]
+
+            # Normalize: ensure we always return a list
+            products = []
+            if isinstance(catalog_data, list):
+                products = catalog_data
+            elif isinstance(catalog_data, dict):
+                # Common Rithum response wrappers
+                products = (
+                    catalog_data.get("Products")
+                    or catalog_data.get("products")
+                    or catalog_data.get("Items")
+                    or catalog_data.get("items")
+                    or catalog_data.get("Results")
+                    or catalog_data.get("results")
+                    or ([catalog_data] if catalog_data.get("SellerSKU") else [])
+                )
+                if not isinstance(products, list):
+                    products = [catalog_data]
+
+            # Extract key fields for dashboard display
+            simplified = []
+            for p in products:
+                if not isinstance(p, dict):
+                    continue
+
+                # Extract product-level fields
+                fields_dict = {}
+                for f in p.get("Fields", []):
+                    if isinstance(f, dict):
+                        fields_dict[f.get("Name", "")] = f.get("Value", "")
+
+                buyables = p.get("BuyableProducts", [])
+                total_qty = sum(b.get("Quantity", 0) for b in buyables if isinstance(b, dict))
+
+                # Collect listing statuses and variant-level fields
+                listing_statuses = set()
+                variant_skus = []
+                for b in buyables:
+                    if not isinstance(b, dict):
+                        continue
+                    listing_statuses.add(b.get("ListingStatus", "Unknown"))
+                    variant_skus.append(b.get("SellerSKU", ""))
+                    # Check variant-level Fields too
+                    for f in b.get("Fields", []):
+                        if isinstance(f, dict) and f.get("Name") and f.get("Value"):
+                            # Only add to product-level if not already there
+                            if f["Name"] not in fields_dict:
+                                fields_dict[f["Name"]] = f["Value"]
+
+                # Determine overall listing status
+                if len(listing_statuses) == 1:
+                    listing_status = listing_statuses.pop()
+                elif "Live" in listing_statuses:
+                    listing_status = "Mixed"
+                else:
+                    listing_status = listing_statuses.pop() if listing_statuses else "Unknown"
+
+                simplified.append({
+                    "seller_sku": p.get("SellerSKU", ""),
+                    "name": fields_dict.get("name", fields_dict.get("Name", "")),
+                    "brand": fields_dict.get("brand", fields_dict.get("Brand", "")),
+                    "category": fields_dict.get("category", ""),
+                    "buyable_count": len(buyables),
+                    "variant_skus": variant_skus,
+                    "total_quantity": total_qty,
+                    "listing_status": listing_status,
+                })
+
+            return jsonify({
+                "products": simplified,
+                "total": len(simplified),
+                "raw_response_type": type(catalog_data).__name__,
+            })
+        else:
+            return jsonify({"error": result["error"]}), 502
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# -----------------------------------------------------------------------
+# Field Mapping API — describes all Shopify→Bluefly field mappings
+# -----------------------------------------------------------------------
+
+@dashboard_bp.route("/api/field-mapping")
+def api_field_mapping():
+    """Return the complete field mapping configuration."""
+    cfg = load_config()
+    field_defaults = cfg.get("field_defaults", {})
+
+    product_fields = [
+        {
+            "bluefly_field": "category",
+            "source_type": "metafield",
+            "shopify_source": "custom.bluefly_category",
+            "description": "Rithum category ID",
+            "required": True,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "brand",
+            "source_type": "product",
+            "shopify_source": "vendor",
+            "description": "Product brand/vendor name",
+            "required": True,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "name",
+            "source_type": "product",
+            "shopify_source": "title",
+            "description": "Product title/name",
+            "required": True,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "description",
+            "source_type": "product",
+            "shopify_source": "descriptionHtml",
+            "description": "Product description (HTML)",
+            "required": True,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "type_frames",
+            "source_type": "product",
+            "shopify_source": "productType",
+            "description": "Product type classification",
+            "required": False,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "material_clothing",
+            "source_type": "tag_parse",
+            "shopify_source": "tags (leather, silk, cotton, wool, polyester, metal, plastic, acetate)",
+            "description": "Material extracted from product tags",
+            "required": False,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "pattern",
+            "source_type": "tag_parse",
+            "shopify_source": "tags (stripe, plaid, check, floral, solid, print, geometric)",
+            "description": "Pattern extracted from product tags",
+            "required": False,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "gender",
+            "source_type": "metafield",
+            "shopify_source": "custom.gender",
+            "description": "Target gender (Men, Women, Unisex)",
+            "required": False,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "sub_category",
+            "source_type": "metafield",
+            "shopify_source": "custom.sub_category",
+            "description": "Product sub-category",
+            "required": False,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "care_instructions",
+            "source_type": "metafield",
+            "shopify_source": "custom.care_instructions",
+            "description": "Care instructions text",
+            "required": False,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "country_of_manufacture",
+            "source_type": "metafield",
+            "shopify_source": "custom.country_of_origin",
+            "description": "Country of manufacture",
+            "required": False,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "size_notes",
+            "source_type": "metafield",
+            "shopify_source": "custom.size_notes",
+            "description": "Size notes / fit guide",
+            "required": False,
+            "editable": False,
+        },
+    ]
+
+    variant_fields = [
+        {
+            "bluefly_field": "color",
+            "source_type": "option/metafield",
+            "shopify_source": "selectedOptions.Color / custom.color",
+            "description": "Display color value",
+            "required": False,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "color_standard",
+            "source_type": "auto",
+            "shopify_source": "Standardized from color via COLOR_STANDARD_MAP",
+            "description": "Standardized color (Black, Brown, Gold, Pink, No color)",
+            "required": False,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "size",
+            "source_type": "option",
+            "shopify_source": "selectedOptions.Size",
+            "description": "Size value",
+            "required": False,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "is_returnable",
+            "source_type": "default",
+            "shopify_source": "N/A",
+            "description": "Return policy",
+            "default_value": field_defaults.get("is_returnable", "Not Returnable"),
+            "options": ["Returnable", "Not Returnable"],
+            "required": True,
+            "editable": True,
+        },
+        {
+            "bluefly_field": "product_condition",
+            "source_type": "default",
+            "shopify_source": "N/A",
+            "description": "Condition of product",
+            "default_value": field_defaults.get("product_condition", "New"),
+            "options": ["New", "Used", "Refurbished"],
+            "required": True,
+            "editable": True,
+        },
+        {
+            "bluefly_field": "upc",
+            "source_type": "variant",
+            "shopify_source": "barcode",
+            "description": "UPC / barcode",
+            "required": False,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "price",
+            "source_type": "variant",
+            "shopify_source": f"price + {cfg.get('price_adjustment_pct', 0)}% adjustment",
+            "description": "Selling price (with adjustment)",
+            "required": True,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "special_price",
+            "source_type": "variant",
+            "shopify_source": f"compareAtPrice + {cfg.get('price_adjustment_pct', 0)}% adjustment",
+            "description": "Compare-at / MSRP price",
+            "required": False,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "image_1 to image_5",
+            "source_type": "product",
+            "shopify_source": "images[0..4]",
+            "description": "Product images (up to 5)",
+            "required": False,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "weight",
+            "source_type": "variant",
+            "shopify_source": "inventoryItem.measurement.weight",
+            "description": "Product weight",
+            "required": False,
+            "editable": False,
+        },
+        {
+            "bluefly_field": "ListingStatus",
+            "source_type": "default",
+            "shopify_source": "Derived from product.status (ACTIVE=Live, other=NotLive)",
+            "description": "Bluefly listing status",
+            "default_value": field_defaults.get("listing_status", "Live"),
+            "options": ["Live", "NotLive"],
+            "required": True,
+            "editable": True,
+        },
+    ]
+
+    # Build color map for reference
+    color_map_display = {}
+    for color_input, standard in COLOR_STANDARD_MAP.items():
+        if standard not in color_map_display:
+            color_map_display[standard] = []
+        color_map_display[standard].append(color_input)
+
+    return jsonify({
+        "product_fields": product_fields,
+        "variant_fields": variant_fields,
+        "field_defaults": field_defaults,
+        "color_standard_map": color_map_display,
+        "eligibility": cfg.get("eligibility", {}),
+    })
 
 
 # -----------------------------------------------------------------------
@@ -589,7 +973,7 @@ def api_get_settings():
 
 @dashboard_bp.route("/api/settings", methods=["POST"])
 def api_update_settings():
-    """Update configuration (price_adjustment_pct)."""
+    """Update configuration (price_adjustment_pct, eligibility, field_defaults)."""
     data = request.get_json(force=True)
 
     cfg = load_config()
@@ -600,12 +984,28 @@ def api_update_settings():
         except (ValueError, TypeError):
             return jsonify({"error": "Invalid price_adjustment_pct value"}), 400
 
+    # Update eligibility settings
+    if "eligibility" in data and isinstance(data["eligibility"], dict):
+        elig = cfg.get("eligibility", {})
+        for key in ("require_category", "require_quantity", "require_images"):
+            if key in data["eligibility"]:
+                elig[key] = bool(data["eligibility"][key])
+        cfg["eligibility"] = elig
+
+    # Update field defaults
+    if "field_defaults" in data and isinstance(data["field_defaults"], dict):
+        defaults = cfg.get("field_defaults", {})
+        for key in ("is_returnable", "product_condition", "listing_status"):
+            if key in data["field_defaults"]:
+                defaults[key] = str(data["field_defaults"][key])
+        cfg["field_defaults"] = defaults
+
     save_config(cfg)
     return jsonify({"success": True, "config": cfg})
 
 
 # -----------------------------------------------------------------------
-# Mapping proxy — proxies the external mapping tool to avoid CORS/iframe
+# Mapping proxy — kept for sub-resource proxy only
 # -----------------------------------------------------------------------
 
 MAPPING_URL = "http://3.150.206.227/bluefly/conversion"
@@ -622,10 +1022,8 @@ def proxy_mapping():
         content = resp.read()
         content_type = resp.headers.get("Content-Type", "text/html")
 
-        # Rewrite relative URLs in HTML to point to the external server
         if "text/html" in content_type:
             html = content.decode("utf-8", errors="replace")
-            # Inject <base> tag so relative URLs resolve to the external server
             base_tag = '<base href="http://3.150.206.227/bluefly/">'
             if "<head>" in html:
                 html = html.replace("<head>", "<head>" + base_tag, 1)
