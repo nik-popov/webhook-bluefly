@@ -34,6 +34,33 @@ dashboard_bp = Blueprint("dashboard", __name__)
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
 
 
+@dashboard_bp.after_request
+def add_no_cache(response):
+    """Prevent browser caching on API responses."""
+    if response.content_type and 'json' in response.content_type:
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+    return response
+
+
+@dashboard_bp.errorhandler(Exception)
+def handle_exception(e):
+    """Catch-all: always return JSON for API errors, never HTML."""
+    import traceback
+    traceback.print_exc()
+    return jsonify({"error": str(e)}), 500
+
+
+@dashboard_bp.errorhandler(404)
+def handle_404(e):
+    return jsonify({"error": "Not found"}), 404
+
+
+@dashboard_bp.errorhandler(500)
+def handle_500(e):
+    return jsonify({"error": "Internal server error"}), 500
+
+
 # -----------------------------------------------------------------------
 # Config helpers
 # -----------------------------------------------------------------------

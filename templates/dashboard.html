@@ -30,7 +30,6 @@
     color: var(--text);
     line-height: 1.5;
   }
-  /* Header */
   .header {
     display: flex;
     align-items: center;
@@ -41,8 +40,6 @@
   }
   .header h1 { font-size: 18px; font-weight: 600; color: #111827; }
   .header .subtitle { font-size: 13px; color: var(--text-muted); }
-
-  /* Tabs */
   .tabs {
     display: flex;
     background: #ffffff;
@@ -61,13 +58,9 @@
     transition: all .15s;
   }
   .tab-btn:hover { color: var(--text); }
-  .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
-
-  /* Tab content */
+  .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 500; }
   .tab-content { display: none; padding: 24px; }
   .tab-content.active { display: block; }
-
-  /* Cards */
   .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
   .card {
     background: #ffffff;
@@ -81,19 +74,9 @@
   .card .value.success { color: var(--success); }
   .card .value.error { color: var(--error); }
   .card .value.warning { color: var(--warning); }
-
-  /* Buttons */
   .btn {
-    padding: 8px 16px;
-    border: none;
-    border-radius: 6px;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all .15s;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
+    padding: 8px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500;
+    cursor: pointer; transition: all .15s; display: inline-flex; align-items: center; gap: 6px;
   }
   .btn-primary { background: var(--primary); color: #fff; }
   .btn-primary:hover { background: var(--primary-hover); }
@@ -103,191 +86,120 @@
   .btn-outline:hover { border-color: var(--text-muted); background: #f9fafb; }
   .btn-sm { padding: 4px 10px; font-size: 12px; }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  /* Toolbar */
   .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 16px;
-    flex-wrap: wrap;
+    display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;
   }
   .toolbar input, .toolbar select {
-    padding: 8px 12px;
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text);
-    font-size: 13px;
+    padding: 8px 12px; background: #ffffff; border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-size: 13px;
   }
   .toolbar input:focus, .toolbar select:focus { outline: none; border-color: var(--primary); }
-
-  /* Section headings */
   .section-heading {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-    margin-top: 8px;
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px; margin-top: 8px;
   }
   .section-heading h3 {
-    font-size: 15px;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 8px;
+    font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px;
   }
   .section-heading .count {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-muted);
-    background: #f3f4f6;
-    padding: 2px 8px;
-    border-radius: 10px;
+    font-size: 12px; font-weight: 500; color: var(--text-muted);
+    background: #f3f4f6; padding: 2px 8px; border-radius: 10px;
   }
-
-  /* Tables */
   .table-wrap {
-    overflow-x: auto;
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    margin-bottom: 24px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    overflow-x: auto; background: #ffffff; border: 1px solid var(--border);
+    border-radius: 8px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
   }
   table { width: 100%; border-collapse: collapse; }
   th {
-    text-align: left;
-    padding: 12px 16px;
-    font-size: 12px;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    border-bottom: 1px solid var(--border);
-    background: #f9fafb;
-    white-space: nowrap;
+    text-align: left; padding: 12px 16px; font-size: 12px; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border);
+    background: #f9fafb; white-space: nowrap;
   }
-  td {
-    padding: 10px 16px;
-    font-size: 13px;
-    border-bottom: 1px solid var(--border);
-    vertical-align: middle;
-  }
+  td { padding: 10px 16px; font-size: 13px; border-bottom: 1px solid var(--border); vertical-align: middle; }
   tr:last-child td { border-bottom: none; }
   tr:hover { background: #f9fafb; }
-
-  /* Badges */
   .badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
   }
   .badge-success { background: var(--success-bg); color: var(--success); }
   .badge-error { background: var(--error-bg); color: var(--error); }
   .badge-gray { background: var(--gray-badge-bg); color: var(--gray-badge); }
   .badge-warning { background: var(--warning-bg); color: var(--warning); }
   .badge-info { background: #eff6ff; color: var(--primary); }
-
-  /* Product image */
-  .prod-img {
-    width: 40px;
-    height: 40px;
-    border-radius: 6px;
-    object-fit: cover;
-    background: #f3f4f6;
-  }
+  .prod-img { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; background: #f3f4f6; }
   .prod-img-placeholder {
-    width: 40px;
-    height: 40px;
-    border-radius: 6px;
-    background: #f3f4f6;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-muted);
-    font-size: 16px;
+    width: 40px; height: 40px; border-radius: 6px; background: #f3f4f6;
+    display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 16px;
   }
-
-  /* Settings form */
   .settings-group {
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 24px;
-    margin-bottom: 16px;
-    max-width: 600px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    background: #ffffff; border: 1px solid var(--border); border-radius: 8px;
+    padding: 24px; margin-bottom: 16px; max-width: 600px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
   }
   .settings-group h3 { font-size: 15px; margin-bottom: 16px; }
   .form-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
   .form-row label { font-size: 13px; min-width: 160px; color: var(--text-muted); }
   .form-row input {
-    padding: 8px 12px;
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text);
-    font-size: 14px;
-    width: 120px;
+    padding: 8px 12px; background: #ffffff; border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-size: 14px; width: 120px;
   }
   .form-row input:focus { outline: none; border-color: var(--primary); }
   .preview-text { font-size: 13px; color: var(--text-muted); margin-top: 8px; }
   .info-row { display: flex; gap: 8px; font-size: 13px; margin-bottom: 6px; }
   .info-label { color: var(--text-muted); min-width: 140px; }
-
-  /* Iframe */
-  .iframe-wrap {
-    width: 100%;
-    height: calc(100vh - 160px);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
-  }
+  .iframe-wrap { width: 100%; height: calc(100vh - 160px); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   .iframe-wrap iframe { width: 100%; height: 100%; border: none; }
-
-  /* Toast */
   .toast-container { position: fixed; top: 20px; right: 20px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
   .toast {
-    padding: 12px 20px;
-    border-radius: 8px;
-    font-size: 13px;
-    font-weight: 500;
-    animation: slideIn 0.3s ease;
-    max-width: 400px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.10);
+    padding: 12px 20px; border-radius: 8px; font-size: 13px; font-weight: 500;
+    animation: slideIn 0.3s ease; max-width: 400px; box-shadow: 0 4px 16px rgba(0,0,0,0.10);
   }
   .toast-success { background: #16a34a; color: #fff; }
   .toast-error { background: #dc2626; color: #fff; }
   @keyframes slideIn { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
-
-  /* Progress bar */
   .progress-bar { background: #f3f4f6; height: 6px; border-radius: 3px; overflow: hidden; margin-bottom: 12px; }
   .progress-bar .fill { height: 100%; background: var(--primary); transition: width 0.3s; }
-
-  /* Spinner */
   .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(0,0,0,0.08); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.6s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-
-  /* Log/stream output */
   .stream-log {
-    background: #f9fafb;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px;
-    max-height: 300px;
-    overflow-y: auto;
-    font-family: 'Menlo', 'Consolas', monospace;
-    font-size: 12px;
-    line-height: 1.8;
-    display: none;
+    background: #f9fafb; border: 1px solid var(--border); border-radius: 8px; padding: 16px;
+    max-height: 300px; overflow-y: auto; font-family: 'Menlo','Consolas',monospace;
+    font-size: 12px; line-height: 1.8; display: none;
   }
   .stream-log .log-line { padding: 2px 0; }
   .stream-log .log-success { color: var(--success); }
   .stream-log .log-error { color: var(--error); }
   .stream-log .log-info { color: var(--primary); }
+  /* Pagination */
+  .pagination {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; border-top: 1px solid var(--border); background: #f9fafb;
+    font-size: 13px; color: var(--text-muted);
+  }
+  .pagination .page-info { font-weight: 500; }
+  .pagination .page-controls { display: flex; gap: 4px; align-items: center; }
+  .pagination .page-controls button {
+    padding: 4px 10px; border: 1px solid var(--border); background: #fff;
+    border-radius: 4px; font-size: 12px; cursor: pointer; color: var(--text);
+  }
+  .pagination .page-controls button:hover:not(:disabled) { background: #f3f4f6; }
+  .pagination .page-controls button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .pagination .page-controls button.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .pagination select { padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px; background: #fff; }
+  /* Empty / loading states */
+  .empty-state { text-align: center; padding: 48px 24px; color: var(--text-muted); }
+  .empty-state .empty-icon { font-size: 32px; margin-bottom: 8px; opacity: 0.4; }
+  .empty-state .empty-text { font-size: 14px; }
+  .loading-state { text-align: center; padding: 48px 24px; color: var(--text-muted); }
+  .loading-state .spinner { width: 24px; height: 24px; margin-bottom: 12px; }
+  .loading-state .loading-text { font-size: 14px; }
+  /* Error banner */
+  .error-banner {
+    background: var(--error-bg); border: 1px solid #fecaca; border-radius: 8px;
+    padding: 12px 16px; margin-bottom: 16px; font-size: 13px; color: var(--error);
+    display: none;
+  }
+  .error-banner.visible { display: block; }
 </style>
 </head>
 <body>
@@ -310,46 +222,40 @@
 
 <!-- ============ TAB: Dashboard (Home) ============ -->
 <div id="tab-home" class="tab-content active">
+  <div id="home-error" class="error-banner"></div>
   <div class="cards">
     <div class="card">
       <div class="label">Unread Events</div>
-      <div class="value warning" id="stat-unread">--</div>
+      <div class="value warning" id="stat-unread"><span class="spinner"></span></div>
     </div>
     <div class="card">
       <div class="label">Errors</div>
-      <div class="value error" id="stat-errors">--</div>
+      <div class="value error" id="stat-errors"><span class="spinner"></span></div>
     </div>
     <div class="card">
       <div class="label">Eligible Products</div>
-      <div class="value" id="stat-eligible">--</div>
+      <div class="value" id="stat-eligible"><span class="spinner"></span></div>
     </div>
     <div class="card">
       <div class="label">Synced (Pushed)</div>
-      <div class="value success" id="stat-synced">--</div>
+      <div class="value success" id="stat-synced"><span class="spinner"></span></div>
     </div>
   </div>
 
   <div class="toolbar">
-    <button class="btn btn-primary" onclick="processEvents()">
-      Process Pending Events
-    </button>
-    <button class="btn btn-outline" onclick="loadDashboard()">
-      Refresh Stats
-    </button>
+    <button class="btn btn-primary" onclick="processEvents()">Process Pending Events</button>
+    <button class="btn btn-outline" onclick="loadDashboard()">Refresh Stats</button>
   </div>
   <div id="home-log" class="stream-log"></div>
 </div>
 
 <!-- ============ TAB: Products ============ -->
 <div id="tab-products" class="tab-content">
+  <div id="products-error" class="error-banner"></div>
   <div class="toolbar">
-    <input type="text" id="product-search" placeholder="Search products..." oninput="filterProducts()">
-    <button class="btn btn-primary" onclick="loadProducts()">
-      Refresh
-    </button>
-    <button class="btn btn-success" id="bulk-push-btn" onclick="bulkPush()">
-      Push All Unpushed
-    </button>
+    <input type="text" id="product-search" placeholder="Search by title, vendor, SKU, or ID..." style="min-width:260px;" oninput="filterProducts()">
+    <button class="btn btn-primary" onclick="loadProducts()">Refresh</button>
+    <button class="btn btn-success" id="bulk-push-btn" onclick="bulkPush()">Push All Unpushed</button>
     <span id="product-count" style="font-size:13px; color:var(--text-muted);"></span>
   </div>
 
@@ -367,19 +273,13 @@
     <table>
       <thead>
         <tr>
-          <th></th>
-          <th>Title</th>
-          <th>Vendor</th>
-          <th>Category</th>
-          <th>Variants</th>
-          <th>Price</th>
-          <th>Qty</th>
-          <th>Status</th>
-          <th>Actions</th>
+          <th></th><th>Title</th><th>Vendor</th><th>Category</th>
+          <th>Variants</th><th>Price</th><th>Qty</th><th>Status</th><th>Actions</th>
         </tr>
       </thead>
       <tbody id="published-tbody"></tbody>
     </table>
+    <div class="pagination" id="published-pagination"></div>
   </div>
 
   <!-- Not Published to Bluefly -->
@@ -390,24 +290,19 @@
     <table>
       <thead>
         <tr>
-          <th></th>
-          <th>Title</th>
-          <th>Vendor</th>
-          <th>Category</th>
-          <th>Variants</th>
-          <th>Price</th>
-          <th>Qty</th>
-          <th>Status</th>
-          <th>Actions</th>
+          <th></th><th>Title</th><th>Vendor</th><th>Category</th>
+          <th>Variants</th><th>Price</th><th>Qty</th><th>Status</th><th>Actions</th>
         </tr>
       </thead>
       <tbody id="unpublished-tbody"></tbody>
     </table>
+    <div class="pagination" id="unpublished-pagination"></div>
   </div>
 </div>
 
 <!-- ============ TAB: Events ============ -->
 <div id="tab-events" class="tab-content">
+  <div id="events-error" class="error-banner"></div>
   <div class="toolbar">
     <input type="date" id="event-date" onchange="loadEvents()">
     <select id="event-status" onchange="loadEvents()">
@@ -417,27 +312,18 @@
       <option value="processed">Processed</option>
       <option value="error">Error</option>
     </select>
-    <button class="btn btn-primary" onclick="processEvents()">
-      Scan &amp; Process
-    </button>
-    <button class="btn btn-outline" onclick="loadEvents()">
-      Refresh
-    </button>
+    <button class="btn btn-primary" onclick="processEvents()">Scan &amp; Process</button>
+    <button class="btn btn-outline" onclick="loadEvents()">Refresh</button>
     <span id="event-count" style="font-size:13px; color:var(--text-muted);"></span>
   </div>
   <div class="table-wrap">
     <table>
       <thead>
-        <tr>
-          <th>Time</th>
-          <th>Topic</th>
-          <th>Product ID</th>
-          <th>Status</th>
-          <th>Event ID</th>
-        </tr>
+        <tr><th>Time</th><th>Topic</th><th>Product ID</th><th>Status</th><th>Event ID</th></tr>
       </thead>
       <tbody id="events-tbody"></tbody>
     </table>
+    <div class="pagination" id="events-pagination"></div>
   </div>
 </div>
 
@@ -450,6 +336,7 @@
 
 <!-- ============ TAB: Settings ============ -->
 <div id="tab-settings" class="tab-content">
+  <div id="settings-error" class="error-banner"></div>
   <div class="settings-group">
     <h3>Price Adjustment</h3>
     <div class="form-row">
@@ -474,6 +361,44 @@
 <div class="toast-container" id="toast-container"></div>
 
 <script>
+// -----------------------------------------------------------------------
+// Core API helper — handles caching, error responses, retries
+// -----------------------------------------------------------------------
+const API_BASE = window.location.origin;
+
+async function apiFetch(path, options = {}) {
+  const url = API_BASE + path;
+  const opts = {
+    cache: 'no-store',
+    headers: {'Accept': 'application/json'},
+    ...options,
+  };
+  let res;
+  try {
+    res = await fetch(url, opts);
+  } catch (networkErr) {
+    throw new Error('Network error: could not reach server. Make sure you are accessing http://localhost:5000');
+  }
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('json')) {
+    const text = await res.text();
+    throw new Error(`Server returned non-JSON (HTTP ${res.status}). Check that you are on http://localhost:5000`);
+  }
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
+async function apiPost(path, body) {
+  return apiFetch(path, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+    body: JSON.stringify(body),
+  });
+}
+
 // -----------------------------------------------------------------------
 // Tab switching
 // -----------------------------------------------------------------------
@@ -501,7 +426,78 @@ function toast(msg, type = 'success') {
   el.className = 'toast toast-' + type;
   el.textContent = msg;
   container.appendChild(el);
-  setTimeout(() => el.remove(), 4000);
+  setTimeout(() => el.remove(), 5000);
+}
+
+function showError(bannerId, msg) {
+  const el = document.getElementById(bannerId);
+  el.textContent = msg;
+  el.classList.add('visible');
+}
+
+function hideError(bannerId) {
+  const el = document.getElementById(bannerId);
+  el.textContent = '';
+  el.classList.remove('visible');
+}
+
+// -----------------------------------------------------------------------
+// Loading / empty state helpers
+// -----------------------------------------------------------------------
+function loadingHTML(cols) {
+  return `<tr><td colspan="${cols}"><div class="loading-state"><span class="spinner"></span><div class="loading-text">Loading...</div></div></td></tr>`;
+}
+function emptyHTML(cols, msg) {
+  return `<tr><td colspan="${cols}"><div class="empty-state"><div class="empty-text">${msg}</div></div></td></tr>`;
+}
+function errorHTML(cols, msg) {
+  return `<tr><td colspan="${cols}"><div class="empty-state"><div class="empty-text" style="color:var(--error)">${esc(msg)}</div></div></td></tr>`;
+}
+
+// -----------------------------------------------------------------------
+// Pagination engine
+// -----------------------------------------------------------------------
+const PAGE_SIZE = 25;
+const _pageState = {};
+
+function paginate(items, tableKey) {
+  if (!_pageState[tableKey]) _pageState[tableKey] = { page: 1 };
+  const state = _pageState[tableKey];
+  const total = items.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (state.page > totalPages) state.page = totalPages;
+
+  const start = (state.page - 1) * PAGE_SIZE;
+  const pageItems = items.slice(start, start + PAGE_SIZE);
+
+  return { items: pageItems, page: state.page, totalPages, total, start };
+}
+
+function renderPagination(containerId, tableKey, total, page, totalPages, onPageChange) {
+  const container = document.getElementById(containerId);
+  if (total <= PAGE_SIZE) { container.innerHTML = ''; return; }
+
+  const start = (page - 1) * PAGE_SIZE + 1;
+  const end = Math.min(page * PAGE_SIZE, total);
+
+  let pageButtons = '';
+  const maxButtons = 5;
+  let startPage = Math.max(1, page - Math.floor(maxButtons / 2));
+  let endPage = Math.min(totalPages, startPage + maxButtons - 1);
+  if (endPage - startPage < maxButtons - 1) startPage = Math.max(1, endPage - maxButtons + 1);
+
+  for (let i = startPage; i <= endPage; i++) {
+    pageButtons += `<button class="${i === page ? 'active' : ''}" onclick="${onPageChange}(${i})">${i}</button>`;
+  }
+
+  container.innerHTML = `
+    <div class="page-info">Showing ${start}-${end} of ${total}</div>
+    <div class="page-controls">
+      <button ${page <= 1 ? 'disabled' : ''} onclick="${onPageChange}(${page-1})">Prev</button>
+      ${pageButtons}
+      <button ${page >= totalPages ? 'disabled' : ''} onclick="${onPageChange}(${page+1})">Next</button>
+    </div>
+  `;
 }
 
 // -----------------------------------------------------------------------
@@ -510,15 +506,18 @@ function toast(msg, type = 'success') {
 let _allProducts = [];
 
 async function loadDashboard() {
+  hideError('home-error');
+  document.getElementById('stat-unread').innerHTML = '<span class="spinner"></span>';
+  document.getElementById('stat-errors').innerHTML = '<span class="spinner"></span>';
+  document.getElementById('stat-eligible').innerHTML = '<span class="spinner"></span>';
+  document.getElementById('stat-synced').innerHTML = '<span class="spinner"></span>';
+
   try {
-    const [prodRes, eventRes, jobRes] = await Promise.all([
-      fetch('/api/products'),
-      fetch('/api/events?status=unread'),
-      fetch('/api/pipeline/jobs'),
+    const [prodData, eventData, jobData] = await Promise.all([
+      apiFetch('/api/products'),
+      apiFetch('/api/events?status=unread'),
+      apiFetch('/api/pipeline/jobs'),
     ]);
-    const prodData = await prodRes.json();
-    const eventData = await eventRes.json();
-    const jobData = await jobRes.json();
 
     const products = prodData.products || [];
     const unread = eventData.events || [];
@@ -532,32 +531,40 @@ async function loadDashboard() {
     document.getElementById('stat-eligible').textContent = products.length;
     document.getElementById('stat-synced').textContent = synced;
   } catch (e) {
-    toast('Failed to load dashboard: ' + e.message, 'error');
+    showError('home-error', 'Failed to load dashboard: ' + e.message);
+    document.getElementById('stat-unread').textContent = '--';
+    document.getElementById('stat-errors').textContent = '--';
+    document.getElementById('stat-eligible').textContent = '--';
+    document.getElementById('stat-synced').textContent = '--';
   }
 }
 
 // -----------------------------------------------------------------------
-// Products (split into Published / Not Published)
+// Products (split into Published / Not Published with pagination)
 // -----------------------------------------------------------------------
+let _publishedProducts = [];
+let _unpublishedProducts = [];
+
 async function loadProducts() {
-  const pubBody = document.getElementById('published-tbody');
-  const unpubBody = document.getElementById('unpublished-tbody');
-  const loadingRow = '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text-muted)"><span class="spinner"></span> Loading products...</td></tr>';
-  pubBody.innerHTML = loadingRow;
-  unpubBody.innerHTML = loadingRow;
+  hideError('products-error');
+  document.getElementById('published-tbody').innerHTML = loadingHTML(9);
+  document.getElementById('unpublished-tbody').innerHTML = loadingHTML(9);
+  document.getElementById('published-pagination').innerHTML = '';
+  document.getElementById('unpublished-pagination').innerHTML = '';
+  _pageState['published'] = { page: 1 };
+  _pageState['unpublished'] = { page: 1 };
 
   try {
-    const res = await fetch('/api/products');
-    const data = await res.json();
+    const data = await apiFetch('/api/products');
     if (data.error) throw new Error(data.error);
 
     _allProducts = data.products || [];
     document.getElementById('product-count').textContent = _allProducts.length + ' eligible products';
-    renderSplitProducts(_allProducts);
+    splitAndRender(_allProducts);
   } catch (e) {
-    const errRow = '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--error)">' + e.message + '</td></tr>';
-    pubBody.innerHTML = errRow;
-    unpubBody.innerHTML = errRow;
+    showError('products-error', e.message);
+    document.getElementById('published-tbody').innerHTML = emptyHTML(9, 'Could not load products');
+    document.getElementById('unpublished-tbody').innerHTML = '';
   }
 }
 
@@ -569,30 +576,49 @@ function filterProducts() {
     (p.first_sku || '').toLowerCase().includes(q) ||
     String(p.id).includes(q)
   );
-  renderSplitProducts(filtered);
+  _pageState['published'] = { page: 1 };
+  _pageState['unpublished'] = { page: 1 };
+  splitAndRender(filtered);
 }
 
-function renderSplitProducts(products) {
-  const published = products.filter(p => p.sync_status === 'pushed');
-  const unpublished = products.filter(p => p.sync_status !== 'pushed');
+function splitAndRender(products) {
+  _publishedProducts = products.filter(p => p.sync_status === 'pushed');
+  _unpublishedProducts = products.filter(p => p.sync_status !== 'pushed');
 
-  document.getElementById('published-count').textContent = published.length;
-  document.getElementById('unpublished-count').textContent = unpublished.length;
+  document.getElementById('published-count').textContent = _publishedProducts.length;
+  document.getElementById('unpublished-count').textContent = _unpublishedProducts.length;
 
-  renderProductTable('published-tbody', published, true);
-  renderProductTable('unpublished-tbody', unpublished, false);
+  renderPublishedPage(_pageState['published'] ? _pageState['published'].page : 1);
+  renderUnpublishedPage(_pageState['unpublished'] ? _pageState['unpublished'].page : 1);
 }
 
-function renderProductTable(tbodyId, products, isPublished) {
+function renderPublishedPage(page) {
+  if (!_pageState['published']) _pageState['published'] = {};
+  _pageState['published'].page = page;
+  const paged = paginate(_publishedProducts, 'published');
+  renderProductTable('published-tbody', paged.items, true,
+    _publishedProducts.length === 0 ? 'No products published to Bluefly yet' : '');
+  renderPagination('published-pagination', 'published', paged.total, paged.page, paged.totalPages, 'renderPublishedPage');
+}
+
+function renderUnpublishedPage(page) {
+  if (!_pageState['unpublished']) _pageState['unpublished'] = {};
+  _pageState['unpublished'].page = page;
+  const paged = paginate(_unpublishedProducts, 'unpublished');
+  renderProductTable('unpublished-tbody', paged.items, false,
+    _unpublishedProducts.length === 0 ? 'All eligible products are published' : '');
+  renderPagination('unpublished-pagination', 'unpublished', paged.total, paged.page, paged.totalPages, 'renderUnpublishedPage');
+}
+
+function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
   const tbody = document.getElementById(tbodyId);
   if (!products.length) {
-    const msg = isPublished ? 'No products published to Bluefly yet' : 'All eligible products are published';
-    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--text-muted)">${msg}</td></tr>`;
+    tbody.innerHTML = emptyHTML(9, emptyMsg || 'No products');
     return;
   }
   tbody.innerHTML = products.map(p => {
     const img = p.image_url
-      ? `<img src="${p.image_url}&width=80" class="prod-img" loading="lazy">`
+      ? `<img src="${p.image_url}&width=80" class="prod-img" loading="lazy" onerror="this.outerHTML='<div class=prod-img-placeholder>?</div>'">`
       : '<div class="prod-img-placeholder">?</div>';
 
     let statusBadge;
@@ -602,9 +628,11 @@ function renderProductTable(tbodyId, products, isPublished) {
     else statusBadge = '<span class="badge badge-gray">Never</span>';
 
     const actions = isPublished
-      ? `<button class="btn btn-primary btn-sm" onclick="pushProduct(${p.id})" title="Re-push to Bluefly">Re-push</button>
-         <button class="btn btn-danger btn-sm" onclick="setDraft(${p.id})" title="Set NotLive on Bluefly">Draft</button>`
-      : `<button class="btn btn-primary btn-sm" onclick="pushProduct(${p.id})" title="Push to Bluefly">Push</button>`;
+      ? `<button class="btn btn-primary btn-sm" onclick="pushProduct(${p.id}, this)" title="Re-push">Re-push</button>
+         <button class="btn btn-danger btn-sm" onclick="setDraft(${p.id}, this)" title="Set NotLive">Draft</button>`
+      : `<button class="btn btn-primary btn-sm" onclick="pushProduct(${p.id}, this)" title="Push to Bluefly">Push</button>`;
+
+    const priceDisplay = p.first_price ? '$' + parseFloat(p.first_price).toFixed(2) : '-';
 
     return `<tr>
       <td>${img}</td>
@@ -612,7 +640,7 @@ function renderProductTable(tbodyId, products, isPublished) {
       <td>${esc(p.vendor)}</td>
       <td>${esc(p.bluefly_category || '-')}</td>
       <td>${p.variant_count}</td>
-      <td>${p.first_price ? '$' + parseFloat(p.first_price).toFixed(2) : '-'}</td>
+      <td>${priceDisplay}</td>
       <td>${p.total_quantity}</td>
       <td>${statusBadge}</td>
       <td style="white-space:nowrap;">${actions}</td>
@@ -620,19 +648,14 @@ function renderProductTable(tbodyId, products, isPublished) {
   }).join('');
 }
 
-async function pushProduct(productId) {
-  const btn = event.target;
+async function pushProduct(productId, btn) {
   btn.disabled = true;
+  const origText = btn.textContent;
   btn.innerHTML = '<span class="spinner"></span>';
   try {
-    const res = await fetch('/api/products/push', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({product_id: productId}),
-    });
-    const data = await res.json();
+    const data = await apiPost('/api/products/push', {product_id: productId});
     if (data.success) {
-      toast(`Pushed: ${data.product_title}`);
+      toast('Pushed: ' + data.product_title);
       loadProducts();
     } else {
       toast(data.error || 'Push failed', 'error');
@@ -641,22 +664,16 @@ async function pushProduct(productId) {
     toast('Push error: ' + e.message, 'error');
   }
   btn.disabled = false;
-  btn.textContent = 'Push';
+  btn.textContent = origText;
 }
 
-async function setDraft(productId) {
-  const btn = event.target;
+async function setDraft(productId, btn) {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>';
   try {
-    const res = await fetch('/api/products/set-status', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({product_id: productId, status: 'NotLive'}),
-    });
-    const data = await res.json();
+    const data = await apiPost('/api/products/set-status', {product_id: productId, status: 'NotLive'});
     if (data.success) {
-      toast(`Drafted: ${data.product_title}`);
+      toast('Drafted: ' + data.product_title);
     } else {
       toast(data.error || 'Draft failed', 'error');
     }
@@ -682,7 +699,7 @@ async function bulkPush() {
   fillEl.style.width = '0%';
 
   try {
-    const res = await fetch('/api/products/push-bulk', {method: 'POST'});
+    const res = await fetch(API_BASE + '/api/products/push-bulk', {method: 'POST', cache: 'no-store'});
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -728,59 +745,71 @@ async function bulkPush() {
 }
 
 // -----------------------------------------------------------------------
-// Events
+// Events (with pagination)
 // -----------------------------------------------------------------------
+let _allEvents = [];
+
 async function loadEvents() {
+  hideError('events-error');
   const tbody = document.getElementById('events-tbody');
-  tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--text-muted)"><span class="spinner"></span> Loading...</td></tr>';
+  tbody.innerHTML = loadingHTML(5);
+  document.getElementById('events-pagination').innerHTML = '';
+  _pageState['events'] = { page: 1 };
 
   const date = document.getElementById('event-date').value;
   const status = document.getElementById('event-status').value;
-
-  let url = '/api/events?';
-  if (date) url += 'date=' + date + '&';
-  if (status) url += 'status=' + status;
+  let path = '/api/events?';
+  if (date) path += 'date=' + date + '&';
+  if (status) path += 'status=' + status;
 
   try {
-    const res = await fetch(url);
-    const data = await res.json();
+    const data = await apiFetch(path);
     if (data.error) throw new Error(data.error);
-
-    const events = data.events || [];
-    document.getElementById('event-count').textContent = events.length + ' events';
-
-    if (!events.length) {
-      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--text-muted)">No events found</td></tr>';
-      return;
-    }
-
-    tbody.innerHTML = events.map(ev => {
-      let badge;
-      if (ev.status === 'processed') badge = '<span class="badge badge-success">Processed</span>';
-      else if (ev.status === 'error') badge = '<span class="badge badge-error">Error</span>';
-      else if (ev.status === 'unread') badge = '<span class="badge badge-warning">Unread</span>';
-      else if (ev.status === 'processing') badge = '<span class="badge badge-info">Processing</span>';
-      else badge = `<span class="badge badge-gray">${esc(ev.status)}</span>`;
-
-      const time = ev.timestamp ? new Date(ev.timestamp).toLocaleString() : '-';
-
-      return `<tr>
-        <td>${time}</td>
-        <td><code style="background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:12px;">${esc(ev.topic)}</code></td>
-        <td>${ev.product_id || '-'}</td>
-        <td>${badge}</td>
-        <td style="font-size:11px;color:var(--text-muted)">${esc(ev.event_id || '-')}</td>
-      </tr>`;
-    }).join('');
+    _allEvents = data.events || [];
+    document.getElementById('event-count').textContent = _allEvents.length + ' events';
+    renderEventsPage(1);
   } catch (e) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--error)">' + e.message + '</td></tr>';
+    showError('events-error', e.message);
+    tbody.innerHTML = emptyHTML(5, 'Could not load events');
   }
+}
+
+function renderEventsPage(page) {
+  _pageState['events'] = { page: page };
+  const paged = paginate(_allEvents, 'events');
+  const tbody = document.getElementById('events-tbody');
+
+  if (!paged.items.length) {
+    tbody.innerHTML = emptyHTML(5, 'No events found');
+    document.getElementById('events-pagination').innerHTML = '';
+    return;
+  }
+
+  tbody.innerHTML = paged.items.map(ev => {
+    let badge;
+    if (ev.status === 'processed') badge = '<span class="badge badge-success">Processed</span>';
+    else if (ev.status === 'error') badge = '<span class="badge badge-error">Error</span>';
+    else if (ev.status === 'unread') badge = '<span class="badge badge-warning">Unread</span>';
+    else if (ev.status === 'processing') badge = '<span class="badge badge-info">Processing</span>';
+    else badge = `<span class="badge badge-gray">${esc(ev.status)}</span>`;
+
+    const time = ev.timestamp ? new Date(ev.timestamp).toLocaleString() : '-';
+
+    return `<tr>
+      <td>${time}</td>
+      <td><code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:12px;">${esc(ev.topic)}</code></td>
+      <td>${ev.product_id || '-'}</td>
+      <td>${badge}</td>
+      <td style="font-size:11px;color:var(--text-muted)">${esc(ev.event_id || '-')}</td>
+    </tr>`;
+  }).join('');
+
+  renderPagination('events-pagination', 'events', paged.total, paged.page, paged.totalPages, 'renderEventsPage');
 }
 
 async function processEvents() {
   try {
-    const res = await fetch('/api/events/process', {method: 'POST'});
-    const data = await res.json();
+    const data = await apiPost('/api/events/process', {});
     if (data.error) {
       toast(data.error, 'error');
     } else {
@@ -799,31 +828,24 @@ async function processEvents() {
 // Settings
 // -----------------------------------------------------------------------
 async function loadSettings() {
+  hideError('settings-error');
   try {
-    const res = await fetch('/api/settings');
-    const data = await res.json();
-
+    const data = await apiFetch('/api/settings');
     document.getElementById('price-adj').value = data.price_adjustment_pct || 0;
     document.getElementById('info-store').textContent = data.store || '-';
     document.getElementById('info-seller').textContent = data.seller_id || '-';
     document.getElementById('info-logdir').textContent = data.log_dir || '-';
     document.getElementById('info-pipedir').textContent = data.pipeline_log_dir || '-';
-
     updatePricePreview();
   } catch (e) {
-    toast('Failed to load settings', 'error');
+    showError('settings-error', 'Failed to load settings: ' + e.message);
   }
 }
 
 async function saveSettings() {
   const adj = parseFloat(document.getElementById('price-adj').value) || 0;
   try {
-    const res = await fetch('/api/settings', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({price_adjustment_pct: adj}),
-    });
-    const data = await res.json();
+    const data = await apiPost('/api/settings', {price_adjustment_pct: adj});
     if (data.success) {
       toast('Settings saved');
     } else {
@@ -857,7 +879,6 @@ function esc(s) {
 // Init
 // -----------------------------------------------------------------------
 loadDashboard();
-
 const today = new Date().toISOString().split('T')[0];
 document.getElementById('event-date').value = today;
 </script>

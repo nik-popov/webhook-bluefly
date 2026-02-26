@@ -261,7 +261,7 @@ def map_variant_to_buyable(
     fields.append({"Name": "size", "Value": size_value or None})
 
     # Defaults
-    fields.append({"Name": "is_returnable", "Value": "Returnable"})
+    fields.append({"Name": "is_returnable", "Value": "Not Returnable"})
     fields.append({"Name": "product_condition", "Value": "New"})
 
     # UPC / barcode
@@ -331,7 +331,7 @@ def build_quantity_price_payload(
     buyable_products = []
     for variant in variants:
         fields = []
-        fields.append({"Name": "is_returnable", "Value": "Returnable"})
+        fields.append({"Name": "is_returnable", "Value": "Not Returnable"})
 
         price = _adjust_price(variant.get("price"), price_adjustment_pct)
         if price is not None:

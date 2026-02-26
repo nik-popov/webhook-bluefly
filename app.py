@@ -29,9 +29,35 @@ load_dotenv()
 app = Flask(__name__)
 
 # Register the dashboard UI Blueprint
-# Register the dashboard UI Blueprint
 from dashboard.routes import dashboard_bp
 app.register_blueprint(dashboard_bp)
+
+
+# App-level error handlers — force JSON for /api/ routes, never return HTML
+@app.errorhandler(404)
+def app_404(e):
+    from flask import request as req, jsonify as jf
+    if req.path.startswith('/api/'):
+        return jf({"error": "Not found: " + req.path}), 404
+    return e  # let Flask handle non-API 404s normally
+
+
+@app.errorhandler(500)
+def app_500(e):
+    from flask import request as req, jsonify as jf
+    if req.path.startswith('/api/'):
+        return jf({"error": "Internal server error"}), 500
+    return e
+
+
+@app.errorhandler(Exception)
+def app_exception(e):
+    from flask import request as req, jsonify as jf
+    import traceback
+    traceback.print_exc()
+    if req.path.startswith('/api/'):
+        return jf({"error": str(e)}), 500
+    return e
 
 WEBHOOK_SECRET = os.environ.get("SHOPIFY_WEBHOOK_SECRET", "")
 LOG_DIR = os.environ.get("LOG_DIR", "./logs")
