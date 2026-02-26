@@ -39,7 +39,7 @@ def app_404(e):
     from flask import request as req, jsonify as jf
     if req.path.startswith('/api/'):
         return jf({"error": "Not found: " + req.path}), 404
-    return e  # let Flask handle non-API 404s normally
+    return e.get_response()
 
 
 @app.errorhandler(500)
@@ -47,7 +47,7 @@ def app_500(e):
     from flask import request as req, jsonify as jf
     if req.path.startswith('/api/'):
         return jf({"error": "Internal server error"}), 500
-    return e
+    return e.get_response()
 
 
 @app.errorhandler(Exception)
@@ -57,7 +57,7 @@ def app_exception(e):
     traceback.print_exc()
     if req.path.startswith('/api/'):
         return jf({"error": str(e)}), 500
-    return e
+    return f"Internal Server Error: {e}", 500
 
 WEBHOOK_SECRET = os.environ.get("SHOPIFY_WEBHOOK_SECRET", "")
 LOG_DIR = os.environ.get("LOG_DIR", "./logs")
@@ -284,8 +284,17 @@ def _sync_inventory_to_bluefly(file_path: str, record: dict):
         except Exception as e:
             print(f"[Pipeline] SQL lookup skipped: {e}")
 
+        # Read price adjustment from config.json
+        _cfg_inv = {}
+        try:
+            import dashboard.routes as _dr_inv
+            _cfg_inv = _dr_inv.load_config()
+        except Exception:
+            pass
+        _adj_inv = _cfg_inv.get("price_adjustment_pct", 0)
+
         # Build lightweight quantityprice payload for inventory updates
-        bluefly_payload = build_quantity_price_payload(enriched, metafields)
+        bluefly_payload = build_quantity_price_payload(enriched, metafields, price_adjustment_pct=_adj_inv)
 
         # Override specific variant's quantity with webhook value
         for bp in bluefly_payload.get("BuyableProducts", []):

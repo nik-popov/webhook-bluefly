@@ -139,6 +139,10 @@ def api_products():
     pipeline_dir = clients["pipeline"].log_dir
     synced_products = _get_synced_product_ids(pipeline_dir)
 
+    # Read price adjustment so we can show adjusted prices
+    cfg = load_config()
+    adj = cfg.get("price_adjustment_pct", 0)
+
     for p in eligible:
         pid = p["id"]
         if pid in synced_products:
@@ -148,7 +152,18 @@ def api_products():
             p["sync_status"] = "never"
             p["sync_time"] = None
 
-    return jsonify({"products": eligible, "total": len(eligible)})
+        # Add adjusted price for display
+        try:
+            raw = float(p.get("first_price") or 0)
+            p["adjusted_price"] = round(raw * (1 + adj / 100), 2) if raw else None
+        except (ValueError, TypeError):
+            p["adjusted_price"] = None
+
+    return jsonify({
+        "products": eligible,
+        "total": len(eligible),
+        "price_adjustment_pct": adj,
+    })
 
 
 def _get_synced_product_ids(pipeline_dir: str) -> dict:
@@ -587,3 +602,62 @@ def api_update_settings():
 
     save_config(cfg)
     return jsonify({"success": True, "config": cfg})
+
+
+# -----------------------------------------------------------------------
+# Mapping proxy — proxies the external mapping tool to avoid CORS/iframe
+# -----------------------------------------------------------------------
+
+MAPPING_URL = "http://3.150.206.227/bluefly/conversion"
+
+
+@dashboard_bp.route("/proxy/mapping")
+def proxy_mapping():
+    """Proxy the external Bluefly mapping tool page."""
+    from urllib.request import Request, urlopen
+    from urllib.error import URLError
+    try:
+        req = Request(MAPPING_URL)
+        resp = urlopen(req, timeout=15)
+        content = resp.read()
+        content_type = resp.headers.get("Content-Type", "text/html")
+
+        # Rewrite relative URLs in HTML to point to the external server
+        if "text/html" in content_type:
+            html = content.decode("utf-8", errors="replace")
+            # Inject <base> tag so relative URLs resolve to the external server
+            base_tag = '<base href="http://3.150.206.227/bluefly/">'
+            if "<head>" in html:
+                html = html.replace("<head>", "<head>" + base_tag, 1)
+            elif "<HEAD>" in html:
+                html = html.replace("<HEAD>", "<HEAD>" + base_tag, 1)
+            else:
+                html = base_tag + html
+            return Response(html, content_type=content_type)
+
+        return Response(content, content_type=content_type)
+    except (URLError, TimeoutError, OSError) as e:
+        return Response(
+            f"<html><body><h3>Could not load mapping tool</h3><p>{e}</p>"
+            f"<p>Try directly: <a href='{MAPPING_URL}' target='_blank'>{MAPPING_URL}</a></p></body></html>",
+            content_type="text/html",
+        )
+
+
+@dashboard_bp.route("/proxy/mapping/<path:subpath>")
+def proxy_mapping_subpath(subpath):
+    """Proxy sub-resources for the mapping tool."""
+    from urllib.request import Request, urlopen
+    from urllib.error import URLError
+    try:
+        url = f"http://3.150.206.227/bluefly/{subpath}"
+        qs = request.query_string.decode()
+        if qs:
+            url += "?" + qs
+        req = Request(url)
+        resp = urlopen(req, timeout=15)
+        content = resp.read()
+        content_type = resp.headers.get("Content-Type", "application/octet-stream")
+        return Response(content, content_type=content_type)
+    except (URLError, TimeoutError, OSError) as e:
+        return Response(str(e), status=502)

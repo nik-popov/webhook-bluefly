@@ -274,7 +274,7 @@
       <thead>
         <tr>
           <th></th><th>Title</th><th>Vendor</th><th>Category</th>
-          <th>Variants</th><th>Price</th><th>Qty</th><th>Status</th><th>Actions</th>
+          <th>Variants</th><th>Bluefly Price</th><th>Qty</th><th>Status</th><th>Actions</th>
         </tr>
       </thead>
       <tbody id="published-tbody"></tbody>
@@ -291,7 +291,7 @@
       <thead>
         <tr>
           <th></th><th>Title</th><th>Vendor</th><th>Category</th>
-          <th>Variants</th><th>Price</th><th>Qty</th><th>Status</th><th>Actions</th>
+          <th>Variants</th><th>Bluefly Price</th><th>Qty</th><th>Status</th><th>Actions</th>
         </tr>
       </thead>
       <tbody id="unpublished-tbody"></tbody>
@@ -330,7 +330,7 @@
 <!-- ============ TAB: Mapping Settings ============ -->
 <div id="tab-mapping" class="tab-content">
   <div class="iframe-wrap">
-    <iframe src="http://3.150.206.227/bluefly/conversion" title="Bluefly Mapping Tool"></iframe>
+    <iframe src="/proxy/mapping" title="Bluefly Mapping Tool"></iframe>
   </div>
 </div>
 
@@ -504,6 +504,7 @@ function renderPagination(containerId, tableKey, total, page, totalPages, onPage
 // Dashboard / Home
 // -----------------------------------------------------------------------
 let _allProducts = [];
+let _priceAdj = 0;
 
 async function loadDashboard() {
   hideError('home-error');
@@ -559,7 +560,9 @@ async function loadProducts() {
     if (data.error) throw new Error(data.error);
 
     _allProducts = data.products || [];
-    document.getElementById('product-count').textContent = _allProducts.length + ' eligible products';
+    _priceAdj = data.price_adjustment_pct || 0;
+    const adjLabel = _priceAdj ? ` (${_priceAdj > 0 ? '+' : ''}${_priceAdj}% adj)` : '';
+    document.getElementById('product-count').textContent = _allProducts.length + ' eligible products' + adjLabel;
     splitAndRender(_allProducts);
   } catch (e) {
     showError('products-error', e.message);
@@ -632,7 +635,16 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
          <button class="btn btn-danger btn-sm" onclick="setDraft(${p.id}, this)" title="Set NotLive">Draft</button>`
       : `<button class="btn btn-primary btn-sm" onclick="pushProduct(${p.id}, this)" title="Push to Bluefly">Push</button>`;
 
-    const priceDisplay = p.first_price ? '$' + parseFloat(p.first_price).toFixed(2) : '-';
+    // Show adjusted price (what Bluefly gets) with original as tooltip
+    let priceDisplay = '-';
+    if (p.adjusted_price != null) {
+      priceDisplay = `<strong>$${parseFloat(p.adjusted_price).toFixed(2)}</strong>`;
+      if (p.first_price && _priceAdj) {
+        priceDisplay += `<br><span style="font-size:10px;color:var(--text-muted);text-decoration:line-through;">$${parseFloat(p.first_price).toFixed(2)}</span>`;
+      }
+    } else if (p.first_price) {
+      priceDisplay = '$' + parseFloat(p.first_price).toFixed(2);
+    }
 
     return `<tr>
       <td>${img}</td>
