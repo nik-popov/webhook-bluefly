@@ -18,7 +18,8 @@
       "Bash(git push:*)",
       "Bash(python process_products.py:*)",
       "mcp__Claude_Preview__preview_start",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(ls:*)"
     ]
   }
 }

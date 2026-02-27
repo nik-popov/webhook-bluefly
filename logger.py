@@ -59,7 +59,7 @@ class TransactionLogger:
         Returns the path of the created file.
         """
         record["received_at"] = datetime.now(timezone.utc).isoformat()
-        record["status"] = "unread"
+        record.setdefault("status", "unread")
 
         day_dir = self._day_dir()
         filename = self._build_filename(record)

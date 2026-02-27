@@ -169,7 +169,7 @@ def process_product_event(
         # All product events (create + update) use /v2/products with full payload.
         # This endpoint is an upsert — creates or updates all fields (color, size,
         # images, options, etc.) on existing products.
-        bluefly_payload = build_bluefly_payload(enriched, metafields, sql_field_map)
+        bluefly_payload = build_bluefly_payload(enriched, metafields, sql_field_map, seller_id=BLUEFLY_SELLER_ID)
 
         bp_count = len(bluefly_payload.get("BuyableProducts", []))
         pipeline.update_stage(job_path, "mapped", {
@@ -282,7 +282,7 @@ def process_inventory_event(
             return
 
         # Build lightweight quantityprice payload for inventory updates
-        bluefly_payload = build_quantity_price_payload(enriched, metafields)
+        bluefly_payload = build_quantity_price_payload(enriched, metafields, seller_id=BLUEFLY_SELLER_ID)
 
         # Override the specific variant's quantity with webhook value
         updated_sku = None

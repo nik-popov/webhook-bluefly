@@ -80,9 +80,11 @@ class BlueflyDBLookup:
                 """,
                 (category_id, variant_title),
             )
+            rows = cursor.fetchall()
             results = {}
-            for row in cursor.fetchall():
+            for row in rows:
                 results[row.FieldName] = row.BFValue
+            print(f"    [SQL] cat={category_id} variant='{variant_title}' → {len(rows)} rows")
             return results
         except pyodbc.ProgrammingError as e:
             # Permission denied or table not found -- non-fatal

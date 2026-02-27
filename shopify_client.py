@@ -137,6 +137,10 @@ class ShopifyClient:
                     name
                     value
                   }
+                  image {
+                    url
+                    altText
+                  }
                   inventoryItem {
                     id
                     measurement {

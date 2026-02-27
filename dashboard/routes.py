@@ -2,21 +2,24 @@
 Dashboard Blueprint — web UI + JSON API for Bluefly sync management.
 
 Provides:
-  GET  /                        Serve the dashboard HTML
-  GET  /api/products            List Bluefly-eligible products
-  POST /api/products/push       Push single product to Bluefly
-  POST /api/products/push-bulk  Push all unpushed eligible products (NDJSON)
-  POST /api/products/set-status Change listing status on Bluefly
-  GET  /api/bluefly/catalog     Fetch live Bluefly catalog
-  GET  /api/events              List webhook events
-  POST /api/events/process      Trigger processing of unread events
-  GET  /api/settings            Read config.json
-  POST /api/settings            Update config.json
-  GET  /api/field-mapping       Get field mapping definitions
-  GET  /api/pipeline/jobs       List recent pipeline jobs
+  GET  /                             Serve the dashboard HTML
+  GET  /api/products                 List Bluefly-eligible products
+  POST /api/products/push            Push single product to Bluefly
+  POST /api/products/push-bulk       Push all unpushed eligible products (NDJSON)
+  POST /api/products/set-status      Change listing status on Bluefly
+  POST /api/products/sync-qty-price  Sync qty+price for a published product
+  GET  /api/bluefly/catalog          Fetch live Bluefly catalog
+  GET  /api/events                   List webhook events
+  POST /api/events/process           Trigger processing of unread events
+  GET  /api/settings                 Read config.json
+  POST /api/settings                 Update config.json
+  GET  /api/pipeline/jobs            List recent pipeline jobs
+  GET  /api/field-mapping            Get field mapping definitions
+  GET  /api/bluefly/field-catalog    Get full Bluefly field catalog (TSV-backed)
 """
 
 import os
+import csv
 import json
 import glob
 import threading
@@ -29,7 +32,6 @@ from field_mapper import (
     get_metafield,
     build_bluefly_payload,
     build_quantity_price_payload,
-    COLOR_STANDARD_MAP,
 )
 
 dashboard_bp = Blueprint("dashboard", __name__)
@@ -165,17 +167,17 @@ def api_products():
     require_quantity = elig.get("require_quantity", True)
     require_images = elig.get("require_images", True)
 
-    # Filter to eligible products based on configured criteria
-    eligible = []
-    for p in all_products:
-        # Category is always required for Bluefly sync
-        if require_category and not p.get("bluefly_category"):
-            continue
-        eligible.append(p)
-
-    # Cross-reference with pipeline logs for sync status
+    # Load sync status first so already-pushed products are never excluded
     pipeline_dir = clients["pipeline"].log_dir
     synced_products = _get_synced_product_ids(pipeline_dir)
+
+    # Filter to eligible products — always include already-pushed products
+    eligible = []
+    for p in all_products:
+        already_pushed = synced_products.get(p["id"], {}).get("status") == "pushed"
+        if require_category and not p.get("bluefly_category") and not already_pushed:
+            continue
+        eligible.append(p)
 
     for p in eligible:
         pid = p["id"]
@@ -204,16 +206,23 @@ def api_products():
         except (ValueError, TypeError):
             p["adjusted_price"] = None
 
+    import app as _app
     return jsonify({
         "products": eligible,
         "total": len(eligible),
         "price_adjustment_pct": adj,
         "eligibility": elig,
+        "store": _app.SHOPIFY_STORE,
     })
 
 
 def _get_synced_product_ids(pipeline_dir: str) -> dict:
-    """Scan pipeline_logs to find the latest status per product_id."""
+    """Scan pipeline_logs to find the latest status per product_id.
+
+    For inventory-triggered jobs the top-level product_id was historically
+    recorded as inventory_item_id.  Fall back to the enriched-stage
+    product_id (the real Shopify ID) when present.
+    """
     result = {}
     pattern = os.path.join(pipeline_dir, "*", "*.json")
     for fpath in sorted(glob.glob(pattern)):
@@ -221,6 +230,14 @@ def _get_synced_product_ids(pipeline_dir: str) -> dict:
             with open(fpath, "r", encoding="utf-8") as f:
                 record = json.load(f)
             pid = record.get("product_id")
+            # For inventory webhooks the real Shopify product_id is stored
+            # in the enriched stage data — prefer that when available.
+            for stage in record.get("stages", []):
+                if stage.get("stage") == "enriched":
+                    enriched_pid = (stage.get("data") or {}).get("product_id")
+                    if enriched_pid:
+                        pid = enriched_pid
+                    break
             if pid:
                 result[pid] = {
                     "status": record.get("status", "unknown"),
@@ -260,15 +277,23 @@ def api_push_product():
 
         # SQL lookup (graceful fallback)
         sql_field_map = {}
+        variants = enriched.get("variants", [])
+        variant_titles = [v.get("title", "") for v in variants]
+        print(f"[Dashboard] SQL lookup: category={category_id}, "
+              f"{len(variants)} variants, titles={variant_titles}")
         try:
             db = _get_db()
             with db:
-                for variant in enriched.get("variants", []):
+                for variant in variants:
                     vt = variant.get("title", "")
                     if vt:
                         sql_field_map[vt] = db.lookup_category_fields(category_id, vt)
+                    else:
+                        print(f"[Dashboard] SQL skipped variant with empty title")
         except Exception as e:
             print(f"[Dashboard] SQL lookup skipped: {e}")
+        total_fields = sum(len(v) for v in sql_field_map.values())
+        print(f"[Dashboard] SQL done: {len(sql_field_map)} variants mapped, {total_fields} fields")
 
         # Build payload with price adjustment and field defaults
         cfg = load_config()
@@ -278,6 +303,7 @@ def api_push_product():
             enriched, metafields, sql_field_map,
             price_adjustment_pct=adj,
             field_defaults=field_defaults,
+            seller_id=bluefly.seller_id,
         )
 
         # Create pipeline job
@@ -381,6 +407,7 @@ def api_push_bulk():
                     enriched, metafields, sql_field_map,
                     price_adjustment_pct=adj,
                     field_defaults=field_defaults,
+                    seller_id=bluefly.seller_id,
                 )
 
                 job_path = pipeline.create_job(
@@ -456,7 +483,7 @@ def api_set_status():
         metafields = enriched.get("metafields", [])
         cfg = load_config()
         adj = cfg.get("price_adjustment_pct", 0)
-        qp = build_quantity_price_payload(enriched, metafields, price_adjustment_pct=adj)
+        qp = build_quantity_price_payload(enriched, metafields, price_adjustment_pct=adj, seller_id=bluefly.seller_id)
 
         # Override all variant statuses
         for bp in qp.get("BuyableProducts", []):
@@ -476,6 +503,152 @@ def api_set_status():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@dashboard_bp.route("/api/products/sync-qty-price", methods=["POST"])
+def api_sync_qty_price():
+    """Push current Shopify qty+price to Bluefly for an already-published product."""
+    data = request.get_json(force=True)
+    product_id = data.get("product_id")
+
+    if not product_id:
+        return jsonify({"error": "product_id required"}), 400
+
+    clients = _get_clients()
+    shopify = clients["shopify"]
+    bluefly = clients["bluefly"]
+    pipeline = clients["pipeline"]
+
+    if not shopify or not bluefly:
+        return jsonify({"error": "Clients not configured"}), 500
+
+    try:
+        enriched = shopify.get_product_full(int(product_id))
+        if not enriched:
+            return jsonify({"error": f"Product {product_id} not found"}), 404
+
+        metafields = enriched.get("metafields", [])
+        cfg = load_config()
+        adj = cfg.get("price_adjustment_pct", 0)
+        qp = build_quantity_price_payload(enriched, metafields, price_adjustment_pct=adj, seller_id=bluefly.seller_id)
+
+        job_path = pipeline.create_job(
+            source_file="dashboard-sync-qty",
+            topic="dashboard/sync-qty-price",
+            product_id=product_id,
+            event_id=f"sync-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+        )
+
+        result = bluefly.update_quantity_price([qp])
+
+        if result["success"]:
+            pipeline.update_stage(job_path, "pushed", {
+                "response_status": result["status_code"],
+                "source": "dashboard-sync",
+            })
+            return jsonify({
+                "success": True,
+                "status_code": result["status_code"],
+                "product_title": enriched.get("title", ""),
+            })
+        else:
+            pipeline.update_stage(job_path, "error", error=result["error"])
+            return jsonify({"error": result["error"]}), 502
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# -----------------------------------------------------------------------
+# Field Mapping — describe how Shopify fields map to Bluefly/Rithum fields
+# -----------------------------------------------------------------------
+
+@dashboard_bp.route("/api/field-mapping")
+def api_field_mapping():
+    """Return the complete field mapping configuration."""
+    cfg = load_config()
+    field_defaults = cfg.get("field_defaults", {})
+    adj = cfg.get("price_adjustment_pct", 0)
+
+    product_fields = [
+        {"bluefly_field": "category",              "source_type": "metafield", "shopify_source": "custom.bluefly_category",                                    "description": "Rithum category ID",          "required": True,  "editable": False},
+        {"bluefly_field": "brand",                 "source_type": "product",   "shopify_source": "vendor",                                                     "description": "Product brand/vendor name",    "required": True,  "editable": False},
+        {"bluefly_field": "name",                  "source_type": "product",   "shopify_source": "title",                                                      "description": "Product title/name",           "required": True,  "editable": False},
+        {"bluefly_field": "description",           "source_type": "product",   "shopify_source": "descriptionHtml",                                            "description": "Product description (HTML)",   "required": True,  "editable": False},
+        {"bluefly_field": "type_frames",           "source_type": "product",   "shopify_source": "productType",                                                "description": "Product type classification",  "required": False, "editable": False},
+        {"bluefly_field": "material_clothing",     "source_type": "tag_parse", "shopify_source": "tags (leather, silk, cotton, wool, polyester, metal, plastic, acetate)", "description": "Material extracted from tags", "required": False, "editable": False},
+        {"bluefly_field": "pattern",               "source_type": "tag_parse", "shopify_source": "tags (stripe, plaid, check, floral, solid, print, geometric)", "description": "Pattern from tags",          "required": False, "editable": False},
+        {"bluefly_field": "gender",                "source_type": "metafield", "shopify_source": "custom.gender",                                              "description": "Target gender",                "required": False, "editable": False},
+        {"bluefly_field": "sub_category",          "source_type": "metafield", "shopify_source": "custom.sub_category",                                        "description": "Product sub-category",         "required": False, "editable": False},
+        {"bluefly_field": "care_instructions",     "source_type": "metafield", "shopify_source": "custom.care_instructions",                                   "description": "Care instructions",            "required": False, "editable": False},
+        {"bluefly_field": "country_of_manufacture","source_type": "metafield", "shopify_source": "custom.country_of_origin",                                   "description": "Country of manufacture",       "required": False, "editable": False},
+        {"bluefly_field": "size_notes",            "source_type": "metafield", "shopify_source": "custom.size_notes",                                          "description": "Size notes / fit guide",       "required": False, "editable": False},
+    ]
+
+    variant_fields = [
+        {"bluefly_field": "color",            "source_type": "option/metafield", "shopify_source": "selectedOptions.Color / custom.color",                                                                 "description": "Display color value",                                                           "required": False, "editable": False},
+        {"bluefly_field": "color_standard",   "source_type": "auto/default",     "shopify_source": "keyword match on color value → fallback default",                                        "description": "Standard color bucket. Auto-matched from color; falls back to configured default.", "required": True,  "editable": True,  "default_value": field_defaults.get("color_standard", "No color"), "options": ["Beige","Black","Blue","Brown","Gold","Green","Grey","Multi","No color","Off White","Orange","Pink","Purple","Red","Silver","White","Yellow"]},
+        {"bluefly_field": "size",             "source_type": "option",           "shopify_source": "selectedOptions.Size",                                                             "description": "Size value",                "required": False, "editable": False},
+        {"bluefly_field": "is_returnable",    "source_type": "default",          "shopify_source": "N/A",                                                                              "description": "Return policy",             "required": True,  "editable": True,  "default_value": field_defaults.get("is_returnable", "Not Returnable"), "options": ["Returnable", "Not Returnable"]},
+        {"bluefly_field": "product_condition","source_type": "default",          "shopify_source": "N/A",                                                                              "description": "Condition of product",      "required": True,  "editable": True,  "default_value": field_defaults.get("product_condition", "New"),         "options": ["New", "Used", "Refurbished"]},
+        {"bluefly_field": "upc",              "source_type": "variant",          "shopify_source": "barcode",                                                                          "description": "UPC / barcode",             "required": False, "editable": False},
+        {"bluefly_field": "price",            "source_type": "variant",          "shopify_source": f"compareAtPrice as-is; falls back to price + {adj}% adj",                        "description": "MSRP / retail 'was' price", "required": True,  "editable": False},
+        {"bluefly_field": "special_price",    "source_type": "variant",          "shopify_source": f"price + {adj}% adjustment (when compareAtPrice set)",                           "description": "Actual selling price",      "required": False, "editable": False},
+        {"bluefly_field": "image_1 to image_5","source_type": "product",        "shopify_source": "images[0..4]",                                                                     "description": "Product images (up to 5)", "required": False, "editable": False},
+        {"bluefly_field": "weight",           "source_type": "variant",          "shopify_source": "inventoryItem.measurement.weight",                                                 "description": "Product weight",            "required": False, "editable": False},
+        {"bluefly_field": "ListingStatus",    "source_type": "default",          "shopify_source": "Derived from product.status",                                                      "description": "Bluefly listing status",    "required": True,  "editable": True,  "default_value": field_defaults.get("listing_status", "Live"),           "options": ["Live", "NotLive"]},
+    ]
+
+    return jsonify({
+        "product_fields": product_fields,
+        "variant_fields": variant_fields,
+        "field_defaults": field_defaults,
+        "eligibility": cfg.get("eligibility", {}),
+    })
+
+
+# -----------------------------------------------------------------------
+# Bluefly Field Catalog — static TSV-backed reference for all Bluefly fields
+# -----------------------------------------------------------------------
+
+_field_catalog_cache = None
+
+
+def _load_field_catalog():
+    global _field_catalog_cache
+    if _field_catalog_cache is not None:
+        return _field_catalog_cache
+    tsv_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'bluefly_field_catalog.tsv')
+    fields = []
+    with open(tsv_path, newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f, delimiter='\t')
+        for row in reader:
+            fields.append({
+                "category":       row["FieldCategory"],
+                "group":          row["FieldGroup"],
+                "display_name":   row["FieldDisplayName"],
+                "field_name":     row["FieldName"],
+                "field_level":    row["FieldLevel"],
+                "importance":     row["Importance"],
+                "data_type":      row["DataType"],
+                "target_ids":     [t for t in row["Target"].split("|^|") if t],
+                "allowed_values": [v for v in row["AllowedValues"].split("|^|") if v],
+                "description":    row["Description"],
+                "min_length":     row["MinLength"],
+                "max_length":     row["MaxLength"],
+            })
+    _field_catalog_cache = fields
+    return fields
+
+
+@dashboard_bp.route("/api/bluefly/field-catalog")
+def api_field_catalog():
+    """Return the Bluefly field catalog, optionally filtered by category ID."""
+    category_id = request.args.get("category_id", "").strip()
+    fields = _load_field_catalog()
+    if category_id:
+        fields = [f for f in fields if category_id in f["target_ids"]]
+    return jsonify({"fields": fields, "total": len(fields)})
 
 
 # -----------------------------------------------------------------------
@@ -553,6 +726,19 @@ def api_bluefly_catalog():
                 else:
                     listing_status = listing_statuses.pop() if listing_statuses else "Unknown"
 
+                # Extract selling price from first BuyableProduct (special_price preferred)
+                catalog_price = None
+                for b in buyables[:1]:
+                    if not isinstance(b, dict):
+                        continue
+                    for f in b.get("Fields", []):
+                        if isinstance(f, dict) and f.get("Name") in ("special_price", "price"):
+                            try:
+                                catalog_price = float(f["Value"])
+                                break
+                            except (TypeError, ValueError):
+                                pass
+
                 simplified.append({
                     "seller_sku": p.get("SellerSKU", ""),
                     "name": fields_dict.get("name", fields_dict.get("Name", "")),
@@ -562,12 +748,15 @@ def api_bluefly_catalog():
                     "variant_skus": variant_skus,
                     "total_quantity": total_qty,
                     "listing_status": listing_status,
+                    "catalog_price": catalog_price,
                 })
 
             return jsonify({
                 "products": simplified,
                 "total": len(simplified),
                 "raw_response_type": type(catalog_data).__name__,
+                # Include raw body when empty to help diagnose response format issues
+                "raw_body": result.get("body", "")[:2000] if not simplified else None,
             })
         else:
             return jsonify({"error": result["error"]}), 502
@@ -577,236 +766,15 @@ def api_bluefly_catalog():
 
 
 # -----------------------------------------------------------------------
-# Field Mapping API — describes all Shopify→Bluefly field mappings
-# -----------------------------------------------------------------------
-
-@dashboard_bp.route("/api/field-mapping")
-def api_field_mapping():
-    """Return the complete field mapping configuration."""
-    cfg = load_config()
-    field_defaults = cfg.get("field_defaults", {})
-
-    product_fields = [
-        {
-            "bluefly_field": "category",
-            "source_type": "metafield",
-            "shopify_source": "custom.bluefly_category",
-            "description": "Rithum category ID",
-            "required": True,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "brand",
-            "source_type": "product",
-            "shopify_source": "vendor",
-            "description": "Product brand/vendor name",
-            "required": True,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "name",
-            "source_type": "product",
-            "shopify_source": "title",
-            "description": "Product title/name",
-            "required": True,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "description",
-            "source_type": "product",
-            "shopify_source": "descriptionHtml",
-            "description": "Product description (HTML)",
-            "required": True,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "type_frames",
-            "source_type": "product",
-            "shopify_source": "productType",
-            "description": "Product type classification",
-            "required": False,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "material_clothing",
-            "source_type": "tag_parse",
-            "shopify_source": "tags (leather, silk, cotton, wool, polyester, metal, plastic, acetate)",
-            "description": "Material extracted from product tags",
-            "required": False,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "pattern",
-            "source_type": "tag_parse",
-            "shopify_source": "tags (stripe, plaid, check, floral, solid, print, geometric)",
-            "description": "Pattern extracted from product tags",
-            "required": False,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "gender",
-            "source_type": "metafield",
-            "shopify_source": "custom.gender",
-            "description": "Target gender (Men, Women, Unisex)",
-            "required": False,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "sub_category",
-            "source_type": "metafield",
-            "shopify_source": "custom.sub_category",
-            "description": "Product sub-category",
-            "required": False,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "care_instructions",
-            "source_type": "metafield",
-            "shopify_source": "custom.care_instructions",
-            "description": "Care instructions text",
-            "required": False,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "country_of_manufacture",
-            "source_type": "metafield",
-            "shopify_source": "custom.country_of_origin",
-            "description": "Country of manufacture",
-            "required": False,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "size_notes",
-            "source_type": "metafield",
-            "shopify_source": "custom.size_notes",
-            "description": "Size notes / fit guide",
-            "required": False,
-            "editable": False,
-        },
-    ]
-
-    variant_fields = [
-        {
-            "bluefly_field": "color",
-            "source_type": "option/metafield",
-            "shopify_source": "selectedOptions.Color / custom.color",
-            "description": "Display color value",
-            "required": False,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "color_standard",
-            "source_type": "auto",
-            "shopify_source": "Standardized from color via COLOR_STANDARD_MAP",
-            "description": "Standardized color (Black, Brown, Gold, Pink, No color)",
-            "required": False,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "size",
-            "source_type": "option",
-            "shopify_source": "selectedOptions.Size",
-            "description": "Size value",
-            "required": False,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "is_returnable",
-            "source_type": "default",
-            "shopify_source": "N/A",
-            "description": "Return policy",
-            "default_value": field_defaults.get("is_returnable", "Not Returnable"),
-            "options": ["Returnable", "Not Returnable"],
-            "required": True,
-            "editable": True,
-        },
-        {
-            "bluefly_field": "product_condition",
-            "source_type": "default",
-            "shopify_source": "N/A",
-            "description": "Condition of product",
-            "default_value": field_defaults.get("product_condition", "New"),
-            "options": ["New", "Used", "Refurbished"],
-            "required": True,
-            "editable": True,
-        },
-        {
-            "bluefly_field": "upc",
-            "source_type": "variant",
-            "shopify_source": "barcode",
-            "description": "UPC / barcode",
-            "required": False,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "price",
-            "source_type": "variant",
-            "shopify_source": f"price + {cfg.get('price_adjustment_pct', 0)}% adjustment",
-            "description": "Selling price (with adjustment)",
-            "required": True,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "special_price",
-            "source_type": "variant",
-            "shopify_source": f"compareAtPrice + {cfg.get('price_adjustment_pct', 0)}% adjustment",
-            "description": "Compare-at / MSRP price",
-            "required": False,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "image_1 to image_5",
-            "source_type": "product",
-            "shopify_source": "images[0..4]",
-            "description": "Product images (up to 5)",
-            "required": False,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "weight",
-            "source_type": "variant",
-            "shopify_source": "inventoryItem.measurement.weight",
-            "description": "Product weight",
-            "required": False,
-            "editable": False,
-        },
-        {
-            "bluefly_field": "ListingStatus",
-            "source_type": "default",
-            "shopify_source": "Derived from product.status (ACTIVE=Live, other=NotLive)",
-            "description": "Bluefly listing status",
-            "default_value": field_defaults.get("listing_status", "Live"),
-            "options": ["Live", "NotLive"],
-            "required": True,
-            "editable": True,
-        },
-    ]
-
-    # Build color map for reference
-    color_map_display = {}
-    for color_input, standard in COLOR_STANDARD_MAP.items():
-        if standard not in color_map_display:
-            color_map_display[standard] = []
-        color_map_display[standard].append(color_input)
-
-    return jsonify({
-        "product_fields": product_fields,
-        "variant_fields": variant_fields,
-        "field_defaults": field_defaults,
-        "color_standard_map": color_map_display,
-        "eligibility": cfg.get("eligibility", {}),
-    })
-
-
-# -----------------------------------------------------------------------
 # Events API
 # -----------------------------------------------------------------------
 
 @dashboard_bp.route("/api/events")
 def api_events():
-    """List webhook events with optional filters."""
+    """List webhook and SQL events with optional filters."""
     status = request.args.get("status")
     date = request.args.get("date")
+    event_type = request.args.get("type")  # "webhook_shopify" | "sql_db" | None
 
     clients = _get_clients()
     tx_logger = clients["tx_logger"]
@@ -836,15 +804,22 @@ def api_events():
         simplified = []
         for ev in events:
             rec = ev["record"]
+            rec_type = rec.get("type", "webhook_shopify")
             simplified.append({
                 "file": ev["file"],
+                "type": rec_type,
                 "timestamp": rec.get("timestamp", ""),
                 "topic": rec.get("topic", ""),
                 "status": rec.get("status", ""),
                 "event_id": rec.get("event_id", ""),
                 "shop_domain": rec.get("shop_domain", ""),
-                "product_id": rec.get("payload", {}).get("id"),
+                "product_id": rec.get("product_id") or rec.get("payload", {}).get("id"),
+                "category_id": rec.get("category_id"),
+                "field_count": rec.get("field_count"),
             })
+
+        if event_type:
+            simplified = [e for e in simplified if e["type"] == event_type]
 
         return jsonify({"events": simplified, "total": len(simplified)})
 
@@ -995,7 +970,7 @@ def api_update_settings():
     # Update field defaults
     if "field_defaults" in data and isinstance(data["field_defaults"], dict):
         defaults = cfg.get("field_defaults", {})
-        for key in ("is_returnable", "product_condition", "listing_status"):
+        for key in ("is_returnable", "product_condition", "listing_status", "color_standard"):
             if key in data["field_defaults"]:
                 defaults[key] = str(data["field_defaults"][key])
         cfg["field_defaults"] = defaults

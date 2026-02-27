@@ -148,12 +148,23 @@ def _sync_product_to_bluefly(file_path: str, record: dict):
 
         category_id = get_metafield(metafields, "custom", "bluefly_category")
 
+        # Load config once — used for eligibility checks, price adjustment, and field defaults
+        _cfg = {}
+        try:
+            import dashboard.routes as _dr
+            _cfg = _dr.load_config()
+        except Exception:
+            pass
+        _adj = _cfg.get("price_adjustment_pct", 0)
+        _field_defaults = _cfg.get("field_defaults", {})
+        _elig = _cfg.get("eligibility", {})
+
         if not should_sync_product(enriched):
             # Auto-draft: if product was on Bluefly (has category), set NotLive
             if category_id and bluefly_client:
                 print(f"[Pipeline] Product not ACTIVE -- auto-drafting on Bluefly")
                 try:
-                    qp = build_quantity_price_payload(enriched, metafields)
+                    qp = build_quantity_price_payload(enriched, metafields, seller_id=BLUEFLY_SELLER_ID)
                     for bp in qp.get("BuyableProducts", []):
                         bp["ListingStatus"] = "NotLive"
                     bluefly_client.update_quantity_price([qp])
@@ -171,32 +182,60 @@ def _sync_product_to_bluefly(file_path: str, record: dict):
             tx_logger.update_status(file_path, "processed")
             return
 
+        if _elig.get("require_images", True) and not enriched.get("images"):
+            print(f"[Pipeline] No images -- skipping")
+            pipeline.update_stage(job_path, "skipped", {"reason": "no images"})
+            tx_logger.update_status(file_path, "processed")
+            return
+
+        if _elig.get("require_quantity", True):
+            total_qty = sum((v.get("inventoryQuantity") or 0) for v in enriched.get("variants", []))
+            if total_qty <= 0:
+                print(f"[Pipeline] No inventory -- skipping")
+                pipeline.update_stage(job_path, "skipped", {"reason": "no inventory"})
+                tx_logger.update_status(file_path, "processed")
+                return
+
         # Map (SQL lookup with graceful fallback)
         pipeline.update_stage(job_path, "mapping")
         sql_field_map = {}
+        variants = enriched.get("variants", [])
+        variant_titles = [v.get("title", "") for v in variants]
+        print(f"[Pipeline] SQL lookup: category={category_id}, "
+              f"{len(variants)} variants, titles={variant_titles}")
         try:
             db = BlueflyDBLookup(SQL_SERVER, SQL_DATABASE, SQL_USER, SQL_PASSWORD)
             with db:
-                for variant in enriched.get("variants", []):
+                for variant in variants:
                     vt = variant.get("title", "")
                     if vt:
                         sql_field_map[vt] = db.lookup_category_fields(category_id, vt)
+                    else:
+                        print(f"[Pipeline] SQL skipped variant with empty title")
         except Exception as e:
             print(f"[Pipeline] SQL lookup skipped: {e}")
-
-        # Read price adjustment from config.json
-        _cfg = {}
-        try:
-            import dashboard.routes as _dr
-            _cfg = _dr.load_config()
-        except Exception:
-            pass
-        _adj = _cfg.get("price_adjustment_pct", 0)
+        total_fields = sum(len(v) for v in sql_field_map.values())
+        print(f"[Pipeline] SQL done: {len(sql_field_map)} variants mapped, {total_fields} fields")
+        tx_logger.log({
+            "type": "sql_db",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "topic": "sql/lookup",
+            "product_id": product_id,
+            "category_id": category_id,
+            "variant_count": len(sql_field_map),
+            "field_count": sum(len(v) for v in sql_field_map.values()),
+            "status": "unread",
+        })
 
         # All product events (create + update) use /v2/products with full payload.
         # This endpoint is an upsert — creates new products or updates all fields
         # (color, size, images, options, etc.) on existing products.
-        bluefly_payload = build_bluefly_payload(enriched, metafields, sql_field_map, price_adjustment_pct=_adj)
+        bluefly_payload = build_bluefly_payload(
+            enriched, metafields, sql_field_map,
+            price_adjustment_pct=_adj,
+            field_defaults=_field_defaults,
+            seller_id=BLUEFLY_SELLER_ID,
+        )
 
         pipeline.update_stage(job_path, "mapped", {
             "seller_sku": bluefly_payload.get("SellerSKU"),
@@ -251,6 +290,9 @@ def _sync_inventory_to_bluefly(file_path: str, record: dict):
         product_id = lookup["product_id"]
         variant_sku = lookup["variant_sku"]
 
+        # Correct the job's product_id — it was created with inventory_item_id
+        pipeline.patch_product_id(job_path, product_id)
+
         enriched = shopify_client.get_product_full(product_id)
         if not enriched:
             raise ValueError(f"Product {product_id} not found")
@@ -272,19 +314,7 @@ def _sync_inventory_to_bluefly(file_path: str, record: dict):
             tx_logger.update_status(file_path, "processed")
             return
 
-        pipeline.update_stage(job_path, "mapping")
-        sql_field_map = {}
-        try:
-            db = BlueflyDBLookup(SQL_SERVER, SQL_DATABASE, SQL_USER, SQL_PASSWORD)
-            with db:
-                for variant in enriched.get("variants", []):
-                    vt = variant.get("title", "")
-                    if vt:
-                        sql_field_map[vt] = db.lookup_category_fields(category_id, vt)
-        except Exception as e:
-            print(f"[Pipeline] SQL lookup skipped: {e}")
-
-        # Read price adjustment from config.json
+        # Load config once — used for eligibility checks, price adjustment, and field defaults
         _cfg_inv = {}
         try:
             import dashboard.routes as _dr_inv
@@ -292,9 +322,58 @@ def _sync_inventory_to_bluefly(file_path: str, record: dict):
         except Exception:
             pass
         _adj_inv = _cfg_inv.get("price_adjustment_pct", 0)
+        _field_defaults_inv = _cfg_inv.get("field_defaults", {})
+        _elig_inv = _cfg_inv.get("eligibility", {})
+
+        if _elig_inv.get("require_images", True) and not enriched.get("images"):
+            pipeline.update_stage(job_path, "skipped", {"reason": "no images"})
+            tx_logger.update_status(file_path, "processed")
+            return
+
+        if _elig_inv.get("require_quantity", True):
+            total_qty = sum((v.get("inventoryQuantity") or 0) for v in enriched.get("variants", []))
+            if total_qty <= 0:
+                pipeline.update_stage(job_path, "skipped", {"reason": "no inventory"})
+                tx_logger.update_status(file_path, "processed")
+                return
+
+        pipeline.update_stage(job_path, "mapping")
+        sql_field_map = {}
+        variants = enriched.get("variants", [])
+        variant_titles = [v.get("title", "") for v in variants]
+        print(f"[Pipeline/inv] SQL lookup: category={category_id}, "
+              f"{len(variants)} variants, titles={variant_titles}")
+        try:
+            db = BlueflyDBLookup(SQL_SERVER, SQL_DATABASE, SQL_USER, SQL_PASSWORD)
+            with db:
+                for variant in variants:
+                    vt = variant.get("title", "")
+                    if vt:
+                        sql_field_map[vt] = db.lookup_category_fields(category_id, vt)
+                    else:
+                        print(f"[Pipeline/inv] SQL skipped variant with empty title")
+        except Exception as e:
+            print(f"[Pipeline] SQL lookup skipped: {e}")
+        total_fields = sum(len(v) for v in sql_field_map.values())
+        print(f"[Pipeline/inv] SQL done: {len(sql_field_map)} variants mapped, {total_fields} fields")
+        tx_logger.log({
+            "type": "sql_db",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "topic": "sql/lookup",
+            "product_id": product_id,
+            "category_id": category_id,
+            "variant_count": len(sql_field_map),
+            "field_count": sum(len(v) for v in sql_field_map.values()),
+            "status": "unread",
+        })
 
         # Build lightweight quantityprice payload for inventory updates
-        bluefly_payload = build_quantity_price_payload(enriched, metafields, price_adjustment_pct=_adj_inv)
+        bluefly_payload = build_quantity_price_payload(
+            enriched, metafields,
+            price_adjustment_pct=_adj_inv,
+            field_defaults=_field_defaults_inv,
+            seller_id=BLUEFLY_SELLER_ID,
+        )
 
         # Override specific variant's quantity with webhook value
         for bp in bluefly_payload.get("BuyableProducts", []):
@@ -401,7 +480,7 @@ def auth_install():
     global _oauth_nonce
     _oauth_nonce = secrets.token_hex(16)
 
-    redirect_uri = "https://tunnel-shopify-vendize.ngrok.app/auth/callback"
+    redirect_uri = "https://accessxbrooklyn-bf.iconluxury.today/auth/callback"
     params = urlencode({
         "client_id": SHOPIFY_API_KEY,
         "scope": SHOPIFY_SCOPES,

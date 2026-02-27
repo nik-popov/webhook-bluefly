@@ -196,7 +196,8 @@ class BlueflyClient:
 
         Returns the raw result dict with 'data' containing the catalog.
         """
-        result = self._get(self.api_url)
+        catalog_url = self.api_url + "?companySlug=bluefly"
+        result = self._get(catalog_url)
         if not result["success"]:
             return result
 

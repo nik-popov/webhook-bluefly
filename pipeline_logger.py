@@ -152,6 +152,24 @@ class PipelineLogger:
 
         return record
 
+    def patch_product_id(self, job_path: str, product_id) -> None:
+        """Overwrite the top-level product_id once the real Shopify ID is known."""
+        lock_path = job_path + ".lock"
+        lock = FileLock(lock_path, timeout=5)
+        with lock:
+            with open(job_path, "r", encoding="utf-8") as f:
+                record = json.load(f)
+            record["product_id"] = product_id
+            with open(job_path, "w", encoding="utf-8") as f:
+                json.dump(record, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+        try:
+            os.remove(lock_path)
+        except OSError:
+            pass
+
     def get_jobs_by_status(self, status: str, date: str = None) -> list[dict]:
         """
         Find all pipeline jobs with a given status.
