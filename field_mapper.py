@@ -7,7 +7,12 @@ Maps Shopify product data to the Rithum API payload format based on:
 
 Output matches the Rithum POST /products body structure exactly.
 """
+import logging
 import re
+
+from field_catalog import get_catalog
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -233,28 +238,13 @@ def _derive_sku(
     seller_id has any non-numeric prefix (e.g. "vpid-") stripped automatically.
     Falls back to the bare variant SKU (or SHOPIFY-{id}) when context is missing.
     """
-    variant_sku = (variant.get("sku") or "").strip()
-    if not variant_sku:
-        gid = variant.get("id", "")
-        numeric = gid.split("/")[-1] if gid else ""
-        variant_sku = f"SHOPIFY-{numeric}" if numeric else ""
-
     if not seller_id or not product:
+        variant_sku = (variant.get("sku") or "").strip()
+        if not variant_sku:
+            gid = variant.get("id", "")
+            numeric = gid.split("/")[-1] if gid else ""
+            variant_sku = f"SHOPIFY-{numeric}" if numeric else ""
         return variant_sku
-
-    # Strip any non-numeric prefix (e.g. "vpid-") from seller_id
-    seller_id = re.sub(r"^[^\d]+", "", seller_id) or seller_id
-
-    # Color from selectedOptions → metafield fallback
-    color = _extract_option(variant, "color")
-    if not color and metafields:
-        color = get_metafield(metafields, "custom", "color") or ""
-    color_slug = _slugify(color)
-
-    # Color code: "c" + last 4 digits of variant numeric GID
-    gid = variant.get("id", "")
-    numeric_id = gid.split("/")[-1] if gid else ""
-    color_code = f"c{numeric_id[-4:]}" if len(numeric_id) >= 4 else f"c{numeric_id}"
 
     # Gender from metafield → tag fallback
     gender_raw = ""
@@ -270,7 +260,7 @@ def _derive_sku(
                 break
     gender = _gender_slug(gender_raw)
 
-    # Build handle: brand-gender-type-in-color
+    # Build handle: brand-gender-type-productId
     # Skip vendor if it matches the numeric seller_id (data quality guard)
     vendor = _slugify(product.get("vendor", ""))
     if vendor == seller_id:
@@ -279,14 +269,94 @@ def _derive_sku(
     if "/" in raw_type:
         raw_type = raw_type.split("/")[-1].strip()
     product_type = _slugify(raw_type)
-    handle_parts = [p for p in [vendor, gender, product_type] if p]
-    if color_slug:
-        handle_parts.append(f"in-{color_slug}")
-    handle = "-".join(handle_parts)
 
-    sku_slug = _slugify(variant_sku)
-    parts = [p for p in [handle, sku_slug, color_code] if p]
-    return "-".join(parts)
+    # Use brand_product_id metafield as the unique product identifier in the handle
+    brand_product_id = ""
+    if metafields:
+        brand_product_id = get_metafield(metafields, "custom", "brand_product_id") or ""
+    brand_product_id = _slugify(brand_product_id)
+
+    handle_parts = [p for p in [vendor, gender, product_type, brand_product_id] if p]
+    derived = "-".join(handle_parts)
+    # Do NOT prepend seller_id — Mindcloud adds it automatically
+    return derived
+
+
+def parse_seller_sku(seller_sku: str) -> dict:
+    """Reverse-parse a structured seller SKU into its component parts.
+
+    Input format:  {seller_id}_{brand}-{gender}-{type}-{variant_sku}-{color_code}
+    Example:       10009_brunello-cucinelli-mens-shoes-mzusofy752-c4407
+    Legacy format: 10009_brunello-cucinelli-mens-shoes-in-multi-mzusofy752-c4407
+
+    Returns dict with keys: seller_id, brand, gender, category, color.
+    Values are title-cased for display.  Missing parts default to "".
+    """
+    result = {"seller_id": "", "brand": "", "gender": "", "category": "", "color": ""}
+
+    if "_" not in seller_sku:
+        return result
+
+    seller_id, _, body = seller_sku.partition("_")
+    result["seller_id"] = seller_id
+
+    # Split on "-in-" to separate the handle from the color+sku tail
+    in_split = body.split("-in-", 1)
+    handle = in_split[0]  # brand-gender-type
+
+    if len(in_split) > 1:
+        tail = in_split[1]  # color-variant_sku-color_code
+        # Color is everything before the last model/sku chunk
+        # The color_code is always the last segment matching c\d+
+        # Walk backwards to find where the color ends
+        tail_parts = tail.split("-")
+        # Find where color ends: first part that looks like a model number
+        # (contains digits mixed with letters and is long, or starts with known patterns)
+        color_parts = []
+        for i, part in enumerate(tail_parts):
+            # Stop at color_code (cNNNN) or model-number-like segments
+            if re.match(r"^c\d{3,5}$", part):
+                break
+            # Stop at segments that look like model numbers (mix of letters+digits, 6+ chars)
+            if len(part) >= 6 and re.search(r"\d", part) and re.search(r"[a-z]", part):
+                break
+            # Stop at "shopify" prefix (synthetic SKU)
+            if part == "shopify":
+                break
+            color_parts.append(part)
+        result["color"] = " ".join(color_parts).title() if color_parts else ""
+
+    # Parse handle: brand tokens, then gender, then category
+    # Stop collecting category when we hit model-number-like segments
+    handle_parts = handle.split("-")
+    gender_keywords = {"mens", "womens", "unisex"}
+
+    brand_parts = []
+    gender = ""
+    category_parts = []
+    found_gender = False
+
+    for part in handle_parts:
+        if not found_gender and part in gender_keywords:
+            gender = part
+            found_gender = True
+        elif found_gender:
+            # Stop at color_code (cNNNN), model numbers, or "shopify"
+            if re.match(r"^c\d{3,5}$", part):
+                break
+            if len(part) >= 6 and re.search(r"\d", part) and re.search(r"[a-z]", part):
+                break
+            if part == "shopify":
+                break
+            category_parts.append(part)
+        else:
+            brand_parts.append(part)
+
+    result["brand"] = " ".join(brand_parts).title() if brand_parts else ""
+    result["gender"] = gender.title() if gender else ""
+    result["category"] = " ".join(category_parts).title() if category_parts else ""
+
+    return result
 
 
 def _adjust_price(price, adjustment_pct: float = 0) -> float | None:
@@ -340,6 +410,9 @@ def map_variant_to_buyable(
     field_defaults: dict = None,
     seller_id: str = "",
     product: dict = None,
+    category_id: str = "",
+    size_scale: str = "",
+    size_field_override: str = "",
 ) -> dict:
     """
     Transform a single Shopify variant into a Rithum BuyableProduct entry.
@@ -368,18 +441,47 @@ def map_variant_to_buyable(
     color_std_default = field_defaults.get("color_standard", "No color")
     fields.append({"Name": "color_standard", "Value": _map_color_standard(color_display, default=color_std_default)})
 
-    # Size — from selectedOptions
+    # Size — resolve category-specific size field via local catalog
+    size_error = None
     size_value = _extract_size_option(variant)
-    fields.append({"Name": "size", "Value": size_value or None})
+    if size_value and category_id:
+        catalog = get_catalog()
+        size_result = catalog.resolve_size(category_id, size_value, size_scale=size_scale, size_field_override=size_field_override)
+        if size_result["field_name"]:
+            if size_result.get("value"):
+                fields.append({"Name": size_result["field_name"], "Value": size_result["value"]})
+            else:
+                logger.warning(
+                    "Size mapping failed: variant=%s size='%s' → %s",
+                    variant.get("id", "?"), size_value, size_result.get("error", "unknown"),
+                )
+                size_error = {
+                    "variant_id": variant.get("id", ""),
+                    "shopify_size": size_value,
+                    "field_name": size_result["field_name"],
+                    "error": size_result.get("error", "unknown"),
+                }
+                if size_result.get("suggestion"):
+                    size_error["suggestion"] = size_result["suggestion"]
+        else:
+            # Category has no size field — send nothing
+            pass
+    elif size_value:
+        # No category_id — fall back to generic size field
+        fields.append({"Name": "size", "Value": size_value})
 
     # Defaults — use config-driven values if provided
-    is_returnable = field_defaults.get("is_returnable", "Not Returnable")
+    is_returnable = field_defaults.get("is_returnable", "NotReturnable")
     product_condition = field_defaults.get("product_condition", "New")
     fields.append({"Name": "is_returnable", "Value": is_returnable})
     fields.append({"Name": "product_condition", "Value": product_condition})
-
-    # UPC / barcode
-    fields.append({"Name": "upc", "Value": variant.get("barcode") or None})
+    raw_sku = (variant.get("sku") or "").strip()
+    # UPC / barcode — use Shopify variant ID as unique barcode per variant
+    variant_gid_for_upc = variant.get("id", "")
+    upc_value = variant_gid_for_upc.split("/")[-1] if "/" in str(variant_gid_for_upc) else str(variant_gid_for_upc)
+    if not upc_value:
+        upc_value = variant.get("barcode") or raw_sku
+    fields.append({"Name": "upc", "Value": upc_value})
 
     # Price mapping:
     #   Bluefly price         = compareAtPrice (MSRP/retail, the "was" price) — no adjustment
@@ -412,9 +514,16 @@ def map_variant_to_buyable(
     fields.append({"Name": "weight", "Value": _format_weight(variant.get("weight"))})
 
     # Raw Shopify SKU — stored so the dashboard can match catalog entries back to Shopify products
-    raw_sku = (variant.get("sku") or "").strip()
+
     if raw_sku:
         fields.append({"Name": "shopify_sku", "Value": raw_sku})
+
+    # Shopify product ID — primary key for matching catalog entries to Shopify products
+    if product:
+        product_gid = product.get("id", "")
+        product_id = product_gid.split("/")[-1] if "/" in str(product_gid) else str(product_gid)
+        if product_id:
+            fields.append({"Name": "shopify_product_id", "Value": product_id})
 
     # SQL-looked-up fields (glasses_magnification, size fields, etc.)
     for field_name, bf_value in sql_fields.items():
@@ -430,12 +539,19 @@ def map_variant_to_buyable(
     # ListingStatus
     listing_status = "Live" if product_status.upper() == "ACTIVE" else "NotLive"
 
-    return {
+    # Variant SellerSKU = Shopify variant numeric ID for reliable catalog matching
+    variant_gid = variant.get("id", "")
+    variant_seller_sku = variant_gid.split("/")[-1] if "/" in str(variant_gid) else str(variant_gid)
+
+    buyable = {
         "Fields": fields,
         "Quantity": variant.get("inventoryQuantity", 0),
-        "SellerSKU": _derive_sku(variant, seller_id=seller_id, product=product, metafields=metafields),
+        "SellerSKU": variant_seller_sku,
         "ListingStatus": listing_status,
     }
+    if size_error:
+        buyable["_size_error"] = size_error
+    return buyable
 
 
 # ---------------------------------------------------------------------------
@@ -466,7 +582,7 @@ def build_quantity_price_payload(
     buyable_products = []
     for variant in variants:
         fields = []
-        fields.append({"Name": "is_returnable", "Value": field_defaults.get("is_returnable", "Not Returnable")})
+        fields.append({"Name": "is_returnable", "Value": field_defaults.get("is_returnable", "NotReturnable")})
 
         selling_price = _adjust_price(variant.get("price"), price_adjustment_pct)
         compare_at = _adjust_price(variant.get("compareAtPrice"), 0)
@@ -476,10 +592,13 @@ def build_quantity_price_payload(
         elif selling_price is not None:
             fields.append({"Name": "price", "Value": _format_price(selling_price)})
 
+        variant_gid = variant.get("id", "")
+        variant_seller_sku = variant_gid.split("/")[-1] if "/" in str(variant_gid) else str(variant_gid)
+
         buyable_products.append({
             "Fields": fields,
             "Quantity": variant.get("inventoryQuantity", 0),
-            "SellerSKU": _derive_sku(variant, seller_id=seller_id, product=product, metafields=metafields),
+            "SellerSKU": variant_seller_sku,
             "ListingStatus": listing_status,
         })
 
@@ -551,6 +670,11 @@ def build_bluefly_payload(
     images = product.get("images", [])
     product_status = product.get("status", "ACTIVE")
 
+    # Extract category_id and size scale hint for size field resolution
+    category_id = get_metafield(metafields, "custom", "bluefly_category") or ""
+    size_scale = get_metafield(metafields, "custom", "ff_size_scale") or ""
+    size_field_override = get_metafield(metafields, "custom", "size_field_override") or ""
+
     buyable_products = []
     for variant in variants:
         variant_title = variant.get("title", "")
@@ -566,6 +690,9 @@ def build_bluefly_payload(
             field_defaults=field_defaults,
             seller_id=seller_id,
             product=product,
+            category_id=category_id,
+            size_scale=size_scale,
+            size_field_override=size_field_override,
         )
         # Strip null-valued fields from variant too
         buyable["Fields"] = [
@@ -573,6 +700,32 @@ def build_bluefly_payload(
             if f.get("Value") is not None
         ]
         buyable_products.append(buyable)
+
+    # Collect size errors and exclude error variants from BuyableProducts
+    size_errors = []
+    good_buyables = []
+    for bp in buyable_products:
+        err = bp.pop("_size_error", None)
+        if err:
+            size_errors.append(err)
+        else:
+            good_buyables.append(bp)
+
+    # Merge buyables that resolved to the same size (e.g. 95B,95C,95D → XXL)
+    # Sum quantities and keep the first entry's fields/SKU.
+    merged = {}
+    for bp in good_buyables:
+        size_val = None
+        for f in bp["Fields"]:
+            if f["Name"].startswith("size_"):
+                size_val = (f["Name"], f["Value"])
+                break
+        key = size_val or bp["SellerSKU"]
+        if key in merged:
+            merged[key]["Quantity"] += bp.get("Quantity", 0)
+        else:
+            merged[key] = bp
+    buyable_products = list(merged.values())
 
     # SellerSKU at product level = first variant's derived SKU
     seller_sku = _derive_sku(variants[0], seller_id=seller_id, product=product, metafields=metafields) if variants else ""
@@ -587,5 +740,7 @@ def build_bluefly_payload(
     }
     if options:
         payload["Options"] = options
+    if size_errors:
+        payload["_size_errors"] = size_errors
 
     return payload

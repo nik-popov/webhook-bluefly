@@ -26,6 +26,8 @@ import os
 import csv
 import json
 import glob
+import time
+import logging
 import threading
 from datetime import datetime, timezone
 
@@ -37,9 +39,20 @@ from field_mapper import (
     get_metafield,
     build_bluefly_payload,
     build_quantity_price_payload,
+    parse_seller_sku,
 )
 
 dashboard_bp = Blueprint("dashboard", __name__)
+
+
+def _patch_metafield(metafields: list, namespace: str, key: str, value: str):
+    """Update or insert a metafield value in the metafields list (in-place)."""
+    for mf in metafields:
+        if mf.get("namespace") == namespace and mf.get("key") == key:
+            mf["value"] = value
+            return
+    metafields.append({"namespace": namespace, "key": key, "value": value})
+logger = logging.getLogger(__name__)
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
 
@@ -50,12 +63,14 @@ DEFAULT_CONFIG = {
         "require_category": True,
         "require_quantity": True,
         "require_images": True,
+        "require_brand_product_id": True,
     },
     "field_defaults": {
-        "is_returnable": "Not Returnable",
+        "is_returnable": "NotReturnable",
         "product_condition": "New",
         "listing_status": "Live",
     },
+    "portal_cookie": "",
 }
 
 
@@ -178,15 +193,18 @@ def _enrich_products(products, synced_products, cfg):
     elig = cfg.get("eligibility", {})
     require_quantity = elig.get("require_quantity", True)
     require_images = elig.get("require_images", True)
+    require_bpid = elig.get("require_brand_product_id", True)
 
     for p in products:
         pid = p["id"]
         if pid in synced_products:
             p["sync_status"] = synced_products[pid]["status"]
             p["sync_time"] = synced_products[pid].get("time")
+            p["size_errors"] = synced_products[pid].get("size_errors")
         else:
             p["sync_status"] = "never"
             p["sync_time"] = None
+            p["size_errors"] = None
 
         if p["sync_status"] == "pushed" and p.get("has_default_variants"):
             p["invalid"] = True
@@ -197,6 +215,27 @@ def _enrich_products(products, synced_products, cfg):
         p["has_images"] = bool(p.get("image_url"))
         p["has_quantity"] = (p.get("total_quantity", 0) or 0) > 0
         p["valid_image_format"] = _has_valid_image_format(p.get("image_url", ""))
+
+        # Apply per-product category override from config
+        cat_overrides = cfg.get("category_overrides", {})
+        override_cat = cat_overrides.get(str(pid))
+        if override_cat:
+            p["bluefly_category"] = override_cat
+            p["category_overridden"] = True
+
+        # Derive size field from category (after any category override)
+        from field_catalog import get_catalog
+        catalog = get_catalog()
+        cat = p.get("bluefly_category", "")
+        sf = catalog.get_size_field_for_category(cat) if cat else None
+        # Apply per-product size field override
+        sf_overrides = cfg.get("size_field_overrides", {})
+        sf_override = sf_overrides.get(str(pid))
+        if sf_override:
+            sf = catalog.get_size_field_by_name(sf_override)
+            p["size_field_overridden"] = True
+        p["size_field"] = sf["field_name"] if sf else None
+        p["size_field_display"] = sf["display_name"] if sf else None
 
         p["push_eligible"] = True
         if not p.get("bluefly_category"):
@@ -210,6 +249,9 @@ def _enrich_products(products, synced_products, cfg):
         if p["has_images"] and not p["valid_image_format"]:
             p["push_eligible"] = False
             p["ineligible_reason"] = "Image format not supported (must be jpg, png, or gif)"
+        if require_bpid and not p.get("brand_product_id"):
+            p["push_eligible"] = False
+            p["ineligible_reason"] = "Missing brand_product_id metafield"
 
         try:
             raw = float(p.get("first_price") or 0)
@@ -282,7 +324,7 @@ def api_products_published():
     pipeline_dir = clients["pipeline"].log_dir
     synced_products = _get_synced_product_ids(pipeline_dir)
     pushed_ids = [pid for pid, info in synced_products.items()
-                  if info.get("status") == "pushed"]
+                  if info.get("status") in ("pushed", "size_error")]
 
     import app as _app
 
@@ -385,10 +427,18 @@ def _get_synced_product_ids(pipeline_dir: str) -> dict:
                         pid = enriched_pid
                     break
             if pid:
-                result[pid] = {
+                entry = {
                     "status": record.get("status", "unknown"),
                     "time": record.get("created_at"),
                 }
+                # Extract size errors from pushed or size_error stage data
+                for stage in record.get("stages", []):
+                    if stage.get("stage") in ("pushed", "size_error"):
+                        se = (stage.get("data") or {}).get("size_errors")
+                        if se:
+                            entry["size_errors"] = se
+                        break
+                result[pid] = entry
         except (json.JSONDecodeError, OSError):
             continue
     return result
@@ -418,11 +468,31 @@ def api_push_product():
 
         metafields = enriched.get("metafields", [])
         category_id = get_metafield(metafields, "custom", "bluefly_category")
+
+        cfg = load_config()
+
+        # Apply per-product category override
+        override_cat = cfg.get("category_overrides", {}).get(str(product_id))
+        if override_cat:
+            category_id = override_cat
+            # Patch metafields so build_bluefly_payload also uses the override
+            _patch_metafield(metafields, "custom", "bluefly_category", override_cat)
+
+        # Apply per-product size field override
+        sf_override = cfg.get("size_field_overrides", {}).get(str(product_id))
+        if sf_override:
+            _patch_metafield(metafields, "custom", "size_field_override", sf_override)
+
         if not category_id:
             return jsonify({"error": "No bluefly_category metafield"}), 400
 
         if is_default_only_product(enriched.get("variants", [])):
             return jsonify({"error": "Product has no real variants (Default Title only)"}), 400
+        elig = cfg.get("eligibility", {})
+        if elig.get("require_brand_product_id", True):
+            bpid = get_metafield(metafields, "custom", "brand_product_id")
+            if not bpid:
+                return jsonify({"error": "Missing brand_product_id metafield (required for unique SKU)"}), 400
 
         if not enriched.get("images"):
             return jsonify({"error": "Product has no images"}), 400
@@ -464,6 +534,9 @@ def api_push_product():
             seller_id=bluefly.seller_id,
         )
 
+        # Extract size errors — block push if any variants have size issues
+        size_errors = bluefly_payload.pop("_size_errors", None)
+
         # Create pipeline job
         job_path = pipeline.create_job(
             source_file="dashboard-push",
@@ -471,6 +544,17 @@ def api_push_product():
             product_id=product_id,
             event_id=f"dash-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
         )
+
+        if size_errors:
+            pipeline.update_stage(job_path, "size_error", {
+                "size_errors": size_errors,
+                "source": "dashboard",
+            })
+            return jsonify({
+                "error": "Size mapping errors — fix size field or add conversion before pushing",
+                "size_errors": size_errors,
+                "product_title": enriched.get("title", ""),
+            }), 422
 
         # Push — use PUT if already published (full overwrite), POST for first push
         pipeline_dir = pipeline.log_dir
@@ -484,12 +568,34 @@ def api_push_product():
             endpoint_label = "products-post"
 
         if result["success"]:
-            pipeline.update_stage(job_path, "pushed", {
+            # Follow-up: set quantity via quantityprice using the same
+            # merged BuyableProducts so inventory reflects summed stock.
+            qp_payload = {
+                "Fields": [],
+                "SellerSKU": bluefly_payload["SellerSKU"],
+                "BuyableProducts": [
+                    {
+                        "Fields": [f for f in bp["Fields"]
+                                   if f["Name"] in ("price", "special_price", "is_returnable")],
+                        "Quantity": bp["Quantity"],
+                        "SellerSKU": bp["SellerSKU"],
+                        "ListingStatus": bp["ListingStatus"],
+                    }
+                    for bp in bluefly_payload.get("BuyableProducts", [])
+                ],
+            }
+            try:
+                bluefly.update_quantity_price([qp_payload])
+            except Exception as qp_err:
+                print(f"[Dashboard] quantityprice follow-up failed: {qp_err}")
+
+            stage_data = {
                 "response_status": result["status_code"],
                 "endpoint": endpoint_label,
                 "sku": bluefly_payload.get("SellerSKU", ""),
                 "source": "dashboard",
-            })
+            }
+            pipeline.update_stage(job_path, "pushed", stage_data)
             return jsonify({
                 "success": True,
                 "status_code": result["status_code"],
@@ -536,10 +642,13 @@ def api_push_bulk():
         cfg = load_config()
         elig = cfg.get("eligibility", {})
 
+        eligible = [p for p in eligible if not p.get("has_default_variants")]
         if elig.get("require_quantity", True):
             eligible = [p for p in eligible if (p.get("total_quantity", 0) or 0) > 0]
         if elig.get("require_images", True):
             eligible = [p for p in eligible if p.get("image_url")]
+        if elig.get("require_brand_product_id", True):
+            eligible = [p for p in eligible if p.get("brand_product_id")]
 
         # Check which are already synced (skipped when force=True)
         synced = _get_synced_product_ids(pipeline.log_dir)
@@ -552,6 +661,8 @@ def api_push_bulk():
 
         adj = cfg.get("price_adjustment_pct", 0)
         field_defaults = cfg.get("field_defaults", {})
+        cat_overrides = cfg.get("category_overrides", {})
+        sf_overrides = cfg.get("size_field_overrides", {})
         success_count = 0
         error_count = 0
 
@@ -566,6 +677,15 @@ def api_push_bulk():
 
                 metafields = enriched.get("metafields", [])
                 category_id = get_metafield(metafields, "custom", "bluefly_category")
+                # Apply per-product category override
+                override_cat = cat_overrides.get(str(pid))
+                if override_cat:
+                    category_id = override_cat
+                    _patch_metafield(metafields, "custom", "bluefly_category", override_cat)
+                # Apply per-product size field override
+                sf_override = sf_overrides.get(str(pid))
+                if sf_override:
+                    _patch_metafield(metafields, "custom", "size_field_override", sf_override)
                 if not category_id:
                     yield json.dumps({"type": "skip", "product_id": pid, "reason": "no category"}) + "\n"
                     continue
@@ -596,12 +716,31 @@ def api_push_bulk():
                     seller_id=bluefly.seller_id,
                 )
 
+                # Extract size errors — block push if any variants have size issues
+                size_errors = payload.pop("_size_errors", None)
+
                 job_path = pipeline.create_job(
                     source_file="dashboard-bulk-push",
                     topic="dashboard/push-bulk",
                     product_id=pid,
                     event_id=f"bulk-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
                 )
+
+                if size_errors:
+                    pipeline.update_stage(job_path, "size_error", {
+                        "size_errors": size_errors,
+                        "source": "dashboard-bulk",
+                    })
+                    error_count += 1
+                    yield json.dumps({
+                        "type": "size_error",
+                        "product_id": pid,
+                        "title": enriched.get("title", ""),
+                        "size_errors": size_errors,
+                        "index": i + 1,
+                        "total": len(to_push),
+                    }) + "\n"
+                    continue
 
                 already_published = synced.get(pid, {}).get("status") == "pushed"
                 if already_published:
@@ -612,12 +751,13 @@ def api_push_bulk():
                     endpoint_label = "products-post"
 
                 if result["success"]:
-                    pipeline.update_stage(job_path, "pushed", {
+                    stage_data = {
                         "response_status": result["status_code"],
                         "endpoint": endpoint_label,
                         "sku": payload.get("SellerSKU", ""),
                         "source": "dashboard-bulk",
-                    })
+                    }
+                    pipeline.update_stage(job_path, "pushed", stage_data)
                     success_count += 1
                     yield json.dumps({
                         "type": "success",
@@ -650,6 +790,118 @@ def api_push_bulk():
         stream_with_context(generate()),
         mimetype="application/x-ndjson",
     )
+
+
+@dashboard_bp.route("/api/products/size-errors", methods=["GET"])
+def api_size_errors():
+    """List all products that failed due to unmappable sizes."""
+    clients = _get_clients()
+    pipeline = clients["pipeline"]
+    errors = pipeline.get_error_jobs()
+    return jsonify({"errors": errors, "count": len(errors)})
+
+
+@dashboard_bp.route("/api/products/retry-errors", methods=["POST"])
+def api_retry_errors():
+    """Retry pushing products that previously failed size mapping.
+
+    Re-runs the full pipeline for each error job. If sizes now resolve,
+    the product pushes and the error job is deleted. If still failing,
+    the error job stays.
+    """
+    clients = _get_clients()
+    shopify = clients["shopify"]
+    bluefly = clients["bluefly"]
+    pipeline = clients["pipeline"]
+
+    if not shopify or not bluefly:
+        return jsonify({"error": "Clients not configured"}), 500
+
+    error_jobs = pipeline.get_error_jobs()
+    if not error_jobs:
+        return jsonify({"message": "No error jobs to retry", "retried": 0})
+
+    cfg = load_config()
+    adj = cfg.get("price_adjustment_pct", 0)
+    field_defaults = cfg.get("field_defaults", {})
+    synced = _get_synced_product_ids(pipeline.log_dir)
+
+    resolved = 0
+    still_failing = 0
+
+    for job in error_jobs:
+        pid = job.get("product_id")
+        file_path = job.get("_file")
+        try:
+            enriched = shopify.get_product_full(int(pid))
+            if not enriched:
+                continue
+            metafields = enriched.get("metafields", [])
+            category_id = get_metafield(metafields, "custom", "bluefly_category")
+            if not category_id:
+                continue
+
+            sql_field_map = {}
+            try:
+                db = _get_db()
+                with db:
+                    for v in enriched.get("variants", []):
+                        vt = v.get("title", "")
+                        if vt:
+                            sql_field_map[vt] = db.lookup_category_fields(category_id, vt)
+            except Exception:
+                pass
+
+            payload = build_bluefly_payload(
+                enriched, metafields, sql_field_map,
+                price_adjustment_pct=adj,
+                field_defaults=field_defaults,
+                seller_id=bluefly.seller_id,
+            )
+
+            new_errors = payload.pop("_size_errors", None)
+
+            # Push with good variants (error variants already excluded)
+            if not payload.get("BuyableProducts"):
+                # ALL variants failed — can't push anything
+                still_failing += 1
+                continue
+
+            job_path = pipeline.create_job(
+                source_file="retry-size-error",
+                topic="dashboard/retry-error",
+                product_id=pid,
+                event_id=f"retry-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+            )
+
+            already_published = synced.get(int(pid), {}).get("status") == "pushed"
+            if already_published:
+                result = bluefly.update_products_full([payload])
+            else:
+                result = bluefly.push_products([payload])
+
+            if result["success"]:
+                stage_data = {
+                    "response_status": result["status_code"],
+                    "sku": payload.get("SellerSKU", ""),
+                    "source": "retry-error",
+                }
+                if new_errors:
+                    stage_data["size_errors"] = new_errors
+                pipeline.update_stage(job_path, "pushed", stage_data)
+                pipeline.delete_error_job(file_path)
+                resolved += 1
+            else:
+                pipeline.update_stage(job_path, "error", error=result["error"])
+                still_failing += 1
+        except Exception:
+            still_failing += 1
+
+    return jsonify({
+        "retried": len(error_jobs),
+        "resolved": resolved,
+        "still_failing": still_failing,
+    })
 
 
 @dashboard_bp.route("/api/products/reset-sync", methods=["POST"])
@@ -695,6 +947,128 @@ def api_reset_sync():
             continue
 
     return jsonify({"reset": deleted})
+
+
+@dashboard_bp.route("/api/products/delete-selected", methods=["POST"])
+def api_delete_selected():
+    """Delete selected products: reset pipeline logs + delete from portal.
+
+    Body: { product_ids: [int, ...] }
+    SKUs are extracted from pipeline logs before deletion and used to match portal products.
+    """
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError, URLError
+
+    data = request.get_json(force=True) or {}
+    product_ids = set(str(pid) for pid in (data.get("product_ids") or []))
+
+    if not product_ids:
+        return jsonify({"error": "product_ids required"}), 400
+
+    def generate():
+        # Step 1: Reset pipeline logs AND collect pushed SKUs for portal matching
+        clients = _get_clients()
+        pipeline_dir = clients["pipeline"].log_dir
+        pattern = os.path.join(pipeline_dir, "*", "*.json")
+        reset_count = 0
+        pushed_skus = set()
+        for fpath in glob.glob(pattern):
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    record = json.load(f)
+                pid = str(record.get("product_id", ""))
+                for stage in record.get("stages", []):
+                    if stage.get("stage") == "enriched":
+                        ep = str((stage.get("data") or {}).get("product_id", ""))
+                        if ep:
+                            pid = ep
+                        break
+                if pid in product_ids:
+                    # Extract SKU from pushed/size_error stage before deleting
+                    for stage in record.get("stages", []):
+                        if stage.get("stage") in ("pushed", "size_error"):
+                            sku = (stage.get("data") or {}).get("sku", "")
+                            if sku:
+                                pushed_skus.add(sku)
+                            break
+                    os.remove(fpath)
+                    reset_count += 1
+            except (OSError, json.JSONDecodeError):
+                continue
+
+        yield json.dumps({"type": "reset", "count": reset_count}) + "\n"
+
+        # Step 2: Delete from Puppet Vendors portal
+        cfg = load_config()
+        cookie = cfg.get("portal_cookie", "")
+        if not cookie or not pushed_skus:
+            yield json.dumps({"type": "complete", "reset": reset_count, "deleted": 0, "errors": 0, "skipped": "no cookie or no pushed SKUs found"}) + "\n"
+            return
+
+        portal_base = "https://app.puppetvendors.com"
+        headers = {
+            "Cookie": f"connect.sid={cookie}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+
+        # Fetch portal products and find matching IDs
+        portal_ids_to_delete = []
+        offset = 0
+        limit = 50
+        while True:
+            url = f"{portal_base}/api/portal/v2/products?limit={limit}&offset={offset}"
+            req = Request(url, headers=headers)
+            try:
+                resp = urlopen(req, timeout=30)
+                resp_data = json.loads(resp.read().decode())
+                products = resp_data.get("products", resp_data.get("data", []))
+                if not isinstance(products, list) or not products:
+                    break
+                for p in products:
+                    # Check if product's SellerSKU or any variant SellerSKU matches
+                    skus = {p.get("SellerSKU", "")}
+                    for b in p.get("BuyableProducts", []):
+                        if isinstance(b, dict):
+                            skus.add(b.get("SellerSKU", ""))
+                    skus.discard("")
+                    if skus & pushed_skus:
+                        pid = p.get("_id", p.get("id", ""))
+                        if pid:
+                            portal_ids_to_delete.append(pid)
+                if len(products) < limit:
+                    break
+                offset += limit
+            except (HTTPError, URLError, Exception) as e:
+                yield json.dumps({"type": "error", "error": f"Portal fetch failed: {str(e)}"}) + "\n"
+                yield json.dumps({"type": "complete", "reset": reset_count, "deleted": 0, "errors": 1}) + "\n"
+                return
+
+        if not portal_ids_to_delete:
+            yield json.dumps({"type": "complete", "reset": reset_count, "deleted": 0, "errors": 0, "note": "No matching portal products found"}) + "\n"
+            return
+
+        yield json.dumps({"type": "deleting", "portal_count": len(portal_ids_to_delete)}) + "\n"
+
+        # Delete in batches
+        success_count = 0
+        error_count = 0
+        batch_size = 50
+        for i in range(0, len(portal_ids_to_delete), batch_size):
+            batch = portal_ids_to_delete[i:i + batch_size]
+            payload = json.dumps({"request": "productDelete", "products": batch}).encode("utf-8")
+            req = Request(f"{portal_base}/api/portal/bulk-action", data=payload, headers=headers, method="POST")
+            try:
+                urlopen(req, timeout=30)
+                success_count += len(batch)
+            except (HTTPError, URLError, Exception) as e:
+                error_count += len(batch)
+                yield json.dumps({"type": "error", "error": f"Delete batch failed: {str(e)}"}) + "\n"
+            time.sleep(0.5)
+
+        yield json.dumps({"type": "complete", "reset": reset_count, "deleted": success_count, "errors": error_count}) + "\n"
+
+    return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
 
 
 @dashboard_bp.route("/api/products/set-status", methods=["POST"])
@@ -744,6 +1118,124 @@ def api_set_status():
         return jsonify({"error": str(e)}), 500
 
 
+@dashboard_bp.route("/api/bluefly/catalog/set-sku-status", methods=["POST"])
+def api_catalog_set_sku_status():
+    """Set all variants of a catalog product (by SellerSKU) to a given ListingStatus."""
+    data = request.get_json(force=True)
+    seller_sku = data.get("seller_sku")
+    new_status = data.get("status", "Live")  # "Live" or "NotLive"
+    variant_skus = data.get("variant_skus")  # optional list of variant SKUs
+
+    if not seller_sku:
+        return jsonify({"error": "seller_sku required"}), 400
+    if new_status not in ("Live", "NotLive"):
+        return jsonify({"error": "status must be Live or NotLive"}), 400
+
+    clients = _get_clients()
+    bluefly = clients["bluefly"]
+    if not bluefly:
+        return jsonify({"error": "Bluefly client not configured"}), 500
+
+    try:
+        # If frontend passed variant SKUs, use them directly (skip catalog fetch)
+        if variant_skus and isinstance(variant_skus, list):
+            buyable_products = [
+                {
+                    "SellerSKU": vsku,
+                    "Fields": [],
+                    "ListingStatus": new_status,
+                }
+                for vsku in variant_skus if vsku
+            ]
+        else:
+            # Fallback: fetch catalog to find variant SKUs
+            result = bluefly.get_catalog()
+            if not result["success"]:
+                return jsonify({"error": result.get("error", "Catalog fetch failed")}), 502
+
+            catalog_data = result["data"]
+            products = []
+            if isinstance(catalog_data, list):
+                products = catalog_data
+            elif isinstance(catalog_data, dict):
+                products = (
+                    catalog_data.get("Products") or catalog_data.get("products")
+                    or catalog_data.get("Items") or catalog_data.get("items")
+                    or catalog_data.get("Results") or catalog_data.get("results")
+                    or ([catalog_data] if catalog_data.get("SellerSKU") else [])
+                )
+                if not isinstance(products, list):
+                    products = [catalog_data]
+
+            product = None
+            for p in products:
+                if isinstance(p, dict) and p.get("SellerSKU") == seller_sku:
+                    product = p
+                    break
+
+            if not product:
+                return jsonify({"error": f"SKU {seller_sku} not found in catalog"}), 404
+
+            buyables = product.get("BuyableProducts", [])
+            buyable_products = [
+                {
+                    "SellerSKU": b["SellerSKU"],
+                    "Fields": [],
+                    "Quantity": b.get("Quantity", 0),
+                    "ListingStatus": new_status,
+                }
+                for b in buyables if isinstance(b, dict) and b.get("SellerSKU")
+            ]
+
+        payload = {
+            "SellerSKU": seller_sku,
+            "Fields": [],
+            "BuyableProducts": buyable_products,
+        }
+
+        res = bluefly.update_quantity_price([payload])
+        if res["success"]:
+            return jsonify({"success": True, "seller_sku": seller_sku, "new_status": new_status})
+        else:
+            return jsonify({"error": res.get("error", "Update failed")}), 502
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@dashboard_bp.route("/api/bluefly/catalog/claim", methods=["POST"])
+def api_catalog_claim():
+    """Create a pipeline log entry for a product already on Bluefly, marking it as published."""
+    data = request.get_json(force=True)
+    product_id = data.get("product_id")
+
+    if not product_id:
+        return jsonify({"error": "product_id required"}), 400
+
+    clients = _get_clients()
+    pipeline = clients["pipeline"]
+    if not pipeline:
+        return jsonify({"error": "Pipeline not configured"}), 500
+
+    try:
+        product_id = int(product_id)
+        # Check if already claimed
+        synced = _get_synced_product_ids(pipeline.log_dir)
+        if synced.get(product_id, {}).get("status") == "pushed":
+            return jsonify({"success": True, "product_id": product_id, "already": True})
+
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        event_id = f"claim-{now.strftime('%Y%m%dT%H%M%SZ')}"
+        job_path = pipeline.create_job("catalog-claim", "catalog/claim", product_id, event_id)
+        pipeline.update_stage(job_path, "pushed", {"reason": "Claimed from catalog — product already exists on Bluefly"})
+
+        return jsonify({"success": True, "product_id": product_id})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @dashboard_bp.route("/api/products/sync-qty-price", methods=["POST"])
 def api_sync_qty_price():
     """Push current Shopify qty+price to Bluefly for an already-published product."""
@@ -769,7 +1261,32 @@ def api_sync_qty_price():
         metafields = enriched.get("metafields", [])
         cfg = load_config()
         adj = cfg.get("price_adjustment_pct", 0)
-        qp = build_quantity_price_payload(enriched, metafields, price_adjustment_pct=adj, seller_id=bluefly.seller_id)
+        field_defaults = cfg.get("field_defaults", {})
+
+        # Use build_bluefly_payload (which has size-merge logic) so that
+        # variants collapsed to the same size (e.g. 95B+95C+95D → XXL)
+        # get their quantities summed correctly.
+        full = build_bluefly_payload(
+            enriched, metafields, {},
+            price_adjustment_pct=adj,
+            field_defaults=field_defaults,
+            seller_id=bluefly.seller_id,
+        )
+        full.pop("_size_errors", None)
+        qp = {
+            "Fields": [],
+            "SellerSKU": full["SellerSKU"],
+            "BuyableProducts": [
+                {
+                    "Fields": [f for f in bp["Fields"]
+                               if f["Name"] in ("price", "special_price", "is_returnable")],
+                    "Quantity": bp["Quantity"],
+                    "SellerSKU": bp["SellerSKU"],
+                    "ListingStatus": bp["ListingStatus"],
+                }
+                for bp in full.get("BuyableProducts", [])
+            ],
+        }
 
         job_path = pipeline.create_job(
             source_file="dashboard-sync-qty",
@@ -828,7 +1345,7 @@ def api_field_mapping():
         {"bluefly_field": "color",            "source_type": "option/metafield", "shopify_source": "selectedOptions.Color / custom.color",                                                                 "description": "Display color value",                                                           "required": False, "editable": False},
         {"bluefly_field": "color_standard",   "source_type": "auto/default",     "shopify_source": "keyword match on color value → fallback default",                                        "description": "Standard color bucket. Auto-matched from color; falls back to configured default.", "required": True,  "editable": True,  "default_value": field_defaults.get("color_standard", "No color"), "options": ["Beige","Black","Blue","Brown","Gold","Green","Grey","Multi","No color","Off White","Orange","Pink","Purple","Red","Silver","White","Yellow"]},
         {"bluefly_field": "size",             "source_type": "option",           "shopify_source": "selectedOptions.Size",                                                             "description": "Size value",                "required": False, "editable": False},
-        {"bluefly_field": "is_returnable",    "source_type": "default",          "shopify_source": "N/A",                                                                              "description": "Return policy",             "required": True,  "editable": True,  "default_value": field_defaults.get("is_returnable", "Not Returnable"), "options": ["Returnable", "Not Returnable"]},
+        {"bluefly_field": "is_returnable",    "source_type": "default",          "shopify_source": "N/A",                                                                              "description": "Return policy",             "required": True,  "editable": True,  "default_value": field_defaults.get("is_returnable", "NotReturnable"), "options": ["Returnable", "NotReturnable"]},
         {"bluefly_field": "product_condition","source_type": "default",          "shopify_source": "N/A",                                                                              "description": "Condition of product",      "required": True,  "editable": True,  "default_value": field_defaults.get("product_condition", "New"),         "options": ["New", "Used", "Refurbished"]},
         {"bluefly_field": "upc",              "source_type": "variant",          "shopify_source": "barcode",                                                                          "description": "UPC / barcode",             "required": False, "editable": False},
         {"bluefly_field": "price",            "source_type": "variant",          "shopify_source": f"compareAtPrice as-is; falls back to price + {adj}% adj",                        "description": "MSRP / retail 'was' price", "required": True,  "editable": False},
@@ -888,6 +1405,135 @@ def api_field_catalog():
     if category_id:
         fields = [f for f in fields if category_id in f["target_ids"]]
     return jsonify({"fields": fields, "total": len(fields)})
+
+
+# -----------------------------------------------------------------------
+# Size Conversion Mappings — editable EU/international → US tables
+# -----------------------------------------------------------------------
+
+@dashboard_bp.route("/api/size-mappings")
+def api_size_mappings_get():
+    """Return all size conversion mapping tables from config."""
+    cfg = load_config()
+    return jsonify(cfg.get("size_mappings", {}))
+
+
+@dashboard_bp.route("/api/size-mappings", methods=["PUT"])
+def api_size_mappings_put():
+    """Save updated size conversion mappings to config and reload catalog."""
+    data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected a JSON object"}), 400
+
+    cfg = load_config()
+    cfg["size_mappings"] = data
+    save_config(cfg)
+
+    # Reload the singleton catalog so new mappings take effect immediately
+    from field_catalog import get_catalog
+    get_catalog().reload_mappings(data)
+
+    return jsonify({"ok": True})
+
+
+# -----------------------------------------------------------------------
+# Brand Size Conversions API — per-brand IT/UK/EU → US tables
+# -----------------------------------------------------------------------
+
+@dashboard_bp.route("/api/brand-size-conversions")
+def api_brand_conversions_get():
+    """Return brand size conversion tables from config."""
+    cfg = load_config()
+    return jsonify(cfg.get("brand_size_conversions", {}))
+
+
+@dashboard_bp.route("/api/brand-size-conversions", methods=["PUT"])
+def api_brand_conversions_put():
+    """Save brand size conversion tables to config and reload catalog."""
+    data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected a JSON object"}), 400
+    cfg = load_config()
+    cfg["brand_size_conversions"] = data
+    save_config(cfg)
+
+    # Reload brand conversions in the singleton catalog
+    from field_catalog import get_catalog
+    get_catalog()._brand_conversions = get_catalog()._load_brand_conversions()
+
+    return jsonify({"ok": True})
+
+
+# -----------------------------------------------------------------------
+# Category Overrides API — per-product category override
+# -----------------------------------------------------------------------
+
+@dashboard_bp.route("/api/category-overrides")
+def api_category_overrides_get():
+    """Return per-product category overrides from config."""
+    cfg = load_config()
+    return jsonify(cfg.get("category_overrides", {}))
+
+
+@dashboard_bp.route("/api/category-overrides", methods=["PUT"])
+def api_category_overrides_put():
+    """Save per-product category overrides to config."""
+    data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected a JSON object"}), 400
+    cfg = load_config()
+    cfg["category_overrides"] = data
+    save_config(cfg)
+    return jsonify({"ok": True})
+
+
+@dashboard_bp.route("/api/category-list")
+def api_category_list():
+    """Return category ID → path mapping from Product Categories.xlsx."""
+    import openpyxl
+    xlsx_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                             "data", "Product Categories.xlsx")
+    if not os.path.exists(xlsx_path):
+        return jsonify({"error": "Product Categories.xlsx not found"}), 404
+    wb = openpyxl.load_workbook(xlsx_path, read_only=True)
+    ws = wb.active
+    cat_map = {}
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        cat_id, path = row[0], row[1]
+        if cat_id is not None:
+            cat_map[str(int(cat_id))] = path
+    wb.close()
+    return jsonify(cat_map)
+
+
+# -----------------------------------------------------------------------
+# Size Field Overrides API — per-product size field override
+# -----------------------------------------------------------------------
+
+@dashboard_bp.route("/api/size-field-overrides")
+def api_size_field_overrides_get():
+    """Return per-product size field overrides from config."""
+    cfg = load_config()
+    return jsonify(cfg.get("size_field_overrides", {}))
+
+
+@dashboard_bp.route("/api/size-field-overrides", methods=["PUT"])
+def api_size_field_overrides_put():
+    """Save per-product size field overrides to config."""
+    data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected a JSON object"}), 400
+    cfg = load_config()
+    cfg["size_field_overrides"] = data
+    save_config(cfg)
+    return jsonify({"ok": True})
+
+
+@dashboard_bp.route("/api/size-field-list")
+def api_size_field_list():
+    """Return all distinct size field definitions for the picker UI."""
+    from field_catalog import get_catalog
+    return jsonify(get_catalog().list_size_fields())
 
 
 # -----------------------------------------------------------------------
@@ -954,7 +1600,7 @@ def api_bluefly_catalog():
                     # Check variant-level Fields too
                     for f in b.get("Fields", []):
                         if isinstance(f, dict) and f.get("Name") and f.get("Value"):
-                            if f["Name"] == "shopify_sku":
+                            if f["Name"] in ("shopify_sku", "shopify_product_id"):
                                 shopify_skus.append(f["Value"])
                             # Only add to product-level if not already there
                             elif f["Name"] not in fields_dict:
@@ -981,25 +1627,56 @@ def api_bluefly_catalog():
                             except (TypeError, ValueError):
                                 pass
 
+                # Use Fields if available, otherwise parse from seller SKU
+                sku_val = p.get("SellerSKU", "")
+                name_val = fields_dict.get("name", fields_dict.get("Name", ""))
+                brand_val = fields_dict.get("brand", fields_dict.get("Brand", ""))
+                category_val = fields_dict.get("category", "")
+
+                if not name_val or not brand_val:
+                    parsed = parse_seller_sku(sku_val)
+                    if not brand_val:
+                        brand_val = parsed["brand"]
+                    if not category_val:
+                        category_val = parsed["category"]
+                    if not name_val:
+                        # Build display name from parsed parts
+                        name_parts = [parsed["brand"], parsed["gender"], parsed["category"]]
+                        name_val = " ".join(part for part in name_parts if part)
+
+                # Build per-variant detail
+                variants = []
+                for b in buyables:
+                    if not isinstance(b, dict) or not b.get("SellerSKU"):
+                        continue
+                    v_fields = {}
+                    for f in b.get("Fields", []):
+                        if isinstance(f, dict) and f.get("Name"):
+                            v_fields[f["Name"]] = f.get("Value", "")
+                    variants.append({
+                        "sku": b["SellerSKU"],
+                        "quantity": b.get("Quantity", 0),
+                        "listing_status": b.get("ListingStatus", "Unknown"),
+                        "price": v_fields.get("special_price") or v_fields.get("price", ""),
+                    })
+
                 simplified.append({
-                    "seller_sku": p.get("SellerSKU", ""),
-                    "name": fields_dict.get("name", fields_dict.get("Name", "")),
-                    "brand": fields_dict.get("brand", fields_dict.get("Brand", "")),
-                    "category": fields_dict.get("category", ""),
+                    "seller_sku": sku_val,
+                    "name": name_val,
+                    "brand": brand_val,
+                    "category": category_val,
                     "buyable_count": len(buyables),
                     "variant_skus": variant_skus,
                     "shopify_skus": shopify_skus,
                     "total_quantity": total_qty,
                     "listing_status": listing_status,
                     "catalog_price": catalog_price,
+                    "variants": variants,
                 })
 
             return jsonify({
                 "products": simplified,
                 "total": len(simplified),
-                "raw_response_type": type(catalog_data).__name__,
-                # Include raw body when empty to help diagnose response format issues
-                "raw_body": result.get("body", "")[:2000] if not simplified else None,
             })
         else:
             return jsonify({"error": result["error"]}), 502
@@ -1057,7 +1734,7 @@ def api_catalog_delist_all():
                     {
                         "SellerSKU": b["SellerSKU"],
                         "Fields": [],
-                        "Quantity": 0,
+                        "Quantity": b.get("Quantity", 0),
                         "ListingStatus": "NotLive",
                     }
                     for b in buyables if isinstance(b, dict) and b.get("SellerSKU")
@@ -1076,6 +1753,242 @@ def api_catalog_delist_all():
                 yield json.dumps({"type": "error", "sku": p["SellerSKU"], "error": str(e)}) + "\n"
 
         yield json.dumps({"type": "complete", "success": success_count, "errors": error_count}) + "\n"
+
+    return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
+
+
+@dashboard_bp.route("/api/bluefly/catalog/set-all-live", methods=["POST"])
+def api_catalog_set_all_live():
+    """Set every product in the Bluefly catalog to ListingStatus=Live. Streams NDJSON."""
+    clients = _get_clients()
+    bluefly = clients["bluefly"]
+    if not bluefly:
+        return jsonify({"error": "Bluefly client not configured"}), 500
+
+    def generate():
+        try:
+            result = bluefly.get_catalog()
+        except Exception as e:
+            yield json.dumps({"type": "error", "error": str(e)}) + "\n"
+            return
+
+        if not result["success"]:
+            yield json.dumps({"type": "error", "error": result.get("error", "Catalog fetch failed")}) + "\n"
+            return
+
+        catalog_data = result["data"]
+        products = []
+        if isinstance(catalog_data, list):
+            products = catalog_data
+        elif isinstance(catalog_data, dict):
+            products = (
+                catalog_data.get("Products") or catalog_data.get("products")
+                or catalog_data.get("Items") or catalog_data.get("items")
+                or catalog_data.get("Results") or catalog_data.get("results")
+                or ([catalog_data] if catalog_data.get("SellerSKU") else [])
+            )
+            if not isinstance(products, list):
+                products = [catalog_data]
+
+        yield json.dumps({"type": "start", "total": len(products)}) + "\n"
+
+        success_count = 0
+        error_count = 0
+        for i, p in enumerate(products):
+            if not isinstance(p, dict) or not p.get("SellerSKU"):
+                continue
+            buyables = p.get("BuyableProducts", [])
+            payload = {
+                "SellerSKU": p["SellerSKU"],
+                "Fields": [],
+                "BuyableProducts": [
+                    {
+                        "SellerSKU": b["SellerSKU"],
+                        "Fields": [],
+                        "Quantity": b.get("Quantity", 0),
+                        "ListingStatus": "Live",
+                    }
+                    for b in buyables if isinstance(b, dict) and b.get("SellerSKU")
+                ],
+            }
+            try:
+                res = bluefly.update_quantity_price([payload])
+                if res["success"]:
+                    success_count += 1
+                    yield json.dumps({"type": "success", "index": i + 1, "total": len(products), "sku": p["SellerSKU"]}) + "\n"
+                else:
+                    error_count += 1
+                    yield json.dumps({"type": "error", "sku": p["SellerSKU"], "error": res.get("error", "")}) + "\n"
+            except Exception as e:
+                error_count += 1
+                yield json.dumps({"type": "error", "sku": p["SellerSKU"], "error": str(e)}) + "\n"
+
+        yield json.dumps({"type": "complete", "success": success_count, "errors": error_count}) + "\n"
+
+    return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
+
+
+@dashboard_bp.route("/api/bluefly/catalog/delete-all", methods=["POST"])
+def api_catalog_delete_all():
+    """Delete all products from Puppet Vendors portal. Streams NDJSON."""
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError, URLError
+
+    cfg = load_config()
+    cookie = cfg.get("portal_cookie", "")
+    if not cookie:
+        return jsonify({"error": "Portal cookie not configured — set it in Settings tab"}), 400
+
+    portal_base = "https://app.puppetvendors.com"
+
+    def generate():
+        headers = {
+            "Cookie": f"connect.sid={cookie}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+
+        # Fetch all product IDs
+        all_ids = []
+        offset = 0
+        limit = 50
+        while True:
+            url = f"{portal_base}/api/portal/v2/products?limit={limit}&offset={offset}"
+            req = Request(url, headers=headers)
+            try:
+                resp = urlopen(req, timeout=30)
+                data = json.loads(resp.read().decode())
+                products = data.get("products", data.get("data", []))
+                if not isinstance(products, list) or not products:
+                    break
+                for p in products:
+                    pid = p.get("_id", p.get("id", ""))
+                    if pid:
+                        all_ids.append(pid)
+                yield json.dumps({"type": "fetch", "fetched": len(all_ids)}) + "\n"
+                if len(products) < limit:
+                    break
+                offset += limit
+            except (HTTPError, URLError, Exception) as e:
+                yield json.dumps({"type": "error", "error": f"Fetch failed at offset {offset}: {str(e)}"}) + "\n"
+                return
+
+        if not all_ids:
+            yield json.dumps({"type": "complete", "success": 0, "errors": 0}) + "\n"
+            return
+
+        yield json.dumps({"type": "start", "total": len(all_ids)}) + "\n"
+
+        # Delete in batches of 50
+        success_count = 0
+        error_count = 0
+        batch_size = 50
+        for i in range(0, len(all_ids), batch_size):
+            batch = all_ids[i:i + batch_size]
+            payload = json.dumps({"request": "productDelete", "products": batch}).encode("utf-8")
+            req = Request(f"{portal_base}/api/portal/bulk-action", data=payload, headers=headers, method="POST")
+            try:
+                resp = urlopen(req, timeout=30)
+                success_count += len(batch)
+                yield json.dumps({
+                    "type": "success",
+                    "index": i + len(batch),
+                    "total": len(all_ids),
+                    "batch_size": len(batch),
+                }) + "\n"
+            except (HTTPError, URLError, Exception) as e:
+                error_count += len(batch)
+                yield json.dumps({"type": "error", "error": str(e)}) + "\n"
+            time.sleep(1)
+
+        yield json.dumps({"type": "complete", "success": success_count, "errors": error_count}) + "\n"
+
+    return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
+
+
+@dashboard_bp.route("/api/products/delete-all", methods=["POST"])
+def api_delete_all_published():
+    """Delete ALL published products: reset all pipeline logs + delete all from portal. Streams NDJSON."""
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError, URLError
+
+    cfg = load_config()
+    cookie = cfg.get("portal_cookie", "")
+
+    def generate():
+        # Step 1: Reset ALL pipeline logs
+        clients = _get_clients()
+        pipeline_dir = clients["pipeline"].log_dir
+        pattern = os.path.join(pipeline_dir, "*", "*.json")
+        reset_count = 0
+        for fpath in glob.glob(pattern):
+            try:
+                os.remove(fpath)
+                reset_count += 1
+            except OSError:
+                continue
+        yield json.dumps({"type": "reset", "count": reset_count}) + "\n"
+
+        # Step 2: Delete all from portal
+        if not cookie:
+            yield json.dumps({"type": "complete", "reset": reset_count, "deleted": 0, "errors": 0, "skipped": "no portal cookie"}) + "\n"
+            return
+
+        portal_base = "https://app.puppetvendors.com"
+        headers = {
+            "Cookie": f"connect.sid={cookie}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+
+        all_ids = []
+        offset = 0
+        limit = 50
+        while True:
+            url = f"{portal_base}/api/portal/v2/products?limit={limit}&offset={offset}"
+            req = Request(url, headers=headers)
+            try:
+                resp = urlopen(req, timeout=30)
+                data = json.loads(resp.read().decode())
+                products = data.get("products", data.get("data", []))
+                if not isinstance(products, list) or not products:
+                    break
+                for p in products:
+                    pid = p.get("_id", p.get("id", ""))
+                    if pid:
+                        all_ids.append(pid)
+                yield json.dumps({"type": "fetch", "fetched": len(all_ids)}) + "\n"
+                if len(products) < limit:
+                    break
+                offset += limit
+            except (HTTPError, URLError, Exception) as e:
+                yield json.dumps({"type": "error", "error": f"Fetch failed: {str(e)}"}) + "\n"
+                yield json.dumps({"type": "complete", "reset": reset_count, "deleted": 0, "errors": 1}) + "\n"
+                return
+
+        if not all_ids:
+            yield json.dumps({"type": "complete", "reset": reset_count, "deleted": 0, "errors": 0}) + "\n"
+            return
+
+        yield json.dumps({"type": "start", "total": len(all_ids)}) + "\n"
+
+        success_count = 0
+        error_count = 0
+        batch_size = 50
+        for i in range(0, len(all_ids), batch_size):
+            batch = all_ids[i:i + batch_size]
+            payload = json.dumps({"request": "productDelete", "products": batch}).encode("utf-8")
+            req = Request(f"{portal_base}/api/portal/bulk-action", data=payload, headers=headers, method="POST")
+            try:
+                urlopen(req, timeout=30)
+                success_count += len(batch)
+                yield json.dumps({"type": "success", "index": i + len(batch), "total": len(all_ids), "batch_size": len(batch)}) + "\n"
+            except (HTTPError, URLError, Exception) as e:
+                error_count += len(batch)
+                yield json.dumps({"type": "error", "error": str(e)}) + "\n"
+            time.sleep(0.5)
+
+        yield json.dumps({"type": "complete", "reset": reset_count, "deleted": success_count, "errors": error_count}) + "\n"
 
     return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
 
@@ -1290,6 +2203,10 @@ def api_update_settings():
                 defaults[key] = str(data["field_defaults"][key])
         cfg["field_defaults"] = defaults
 
+    # Portal cookie
+    if "portal_cookie" in data:
+        cfg["portal_cookie"] = str(data["portal_cookie"])
+
     save_config(cfg)
     return jsonify({"success": True, "config": cfg})
 
@@ -1317,33 +2234,26 @@ def api_orders():
     try:
         result = bf.get_orders(status=status)
         if not result["success"]:
+            logger.warning("api_orders: failed for status=%s — %s", status, result.get("error"))
             return jsonify({"error": result["error"]}), 502
 
         orders = result["data"]
 
-        # Handle double-encoded responses: list of JSON strings
-        if isinstance(orders, list) and len(orders) == 1 and isinstance(orders[0], str):
-            try:
-                parsed = json.loads(orders[0])
-                if isinstance(parsed, dict) and "ResponseBody" in parsed:
-                    orders = parsed["ResponseBody"]
-                elif isinstance(parsed, list):
-                    orders = parsed
-                else:
-                    orders = [parsed]
-            except (json.JSONDecodeError, TypeError):
-                pass
-        elif isinstance(orders, str):
+        # Fallback: if data is a bare string, try to parse it
+        if isinstance(orders, str):
             try:
                 orders = json.loads(orders)
             except (json.JSONDecodeError, TypeError):
                 orders = []
 
         if not isinstance(orders, list):
+            logger.warning("api_orders: orders is not a list (type=%s), defaulting to []", type(orders).__name__)
             orders = []
 
+        logger.info("api_orders: returning %d orders for status=%s", len(orders), status)
         return jsonify({"orders": orders})
     except Exception as e:
+        logger.exception("api_orders: unexpected error for status=%s", status)
         return jsonify({"error": str(e)}), 500
 
 

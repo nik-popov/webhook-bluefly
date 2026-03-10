@@ -16,7 +16,10 @@ Order endpoints:
 """
 
 import json
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
@@ -268,7 +271,7 @@ class BlueflyClient:
 
         Returns the raw result dict with 'data' containing the catalog.
         """
-        catalog_url = self.api_url + "?companySlug=bluefly"
+        catalog_url = self.api_url 
         result = self._get(catalog_url)
         if not result["success"]:
             return result
@@ -371,24 +374,45 @@ class BlueflyClient:
         Use for products/update and inventory_levels/update events.
         Updates: price, special_price, quantity, is_returnable, ListingStatus.
         """
-        return self._post(self.quantity_price_url, products, max_retries)
+        for p in products:
+            skus = [b.get("SellerSKU", "?") for b in p.get("BuyableProducts", [])]
+            statuses = [b.get("ListingStatus", "?") for b in p.get("BuyableProducts", [])]
+            logger.info("update_quantity_price: SKU=%s variants=%s statuses=%s", p.get("SellerSKU"), skus, statuses)
+        result = self._post(self.quantity_price_url, products, max_retries)
+        logger.info("update_quantity_price result: success=%s status_code=%s body=%.500s", result.get("success"), result.get("status_code"), result.get("body", ""))
+        return result
 
     # ------------------------------------------------------------------
     # Order API methods
     # ------------------------------------------------------------------
 
     def get_orders(
-        self, status: str = "ReleasedForShipment", max_retries: int = 3
+        self,
+        status: str = "releasedforshipment",
+        max_retries: int = 3,
+        max_poll: int = 10,
+        poll_interval: int = 3,
     ) -> dict:
         """
         GET /v2/orders — Download orders from Bluefly.
 
-        Returns the parsed response with order data.
+        Like the catalog endpoint, the Rithum API may be async: the first
+        response can return a PendingUri which must be polled until Status
+        becomes 'Complete'.
+
+        Returns the parsed result dict with 'data' containing the order list.
         """
         from urllib.parse import quote
         url = f"{self.orders_v2_url}?status={quote(status)}&limit=2147483647"
+        logger.info("get_orders: fetching status=%s url=%s", status, url)
         result = self._get(url, max_retries)
+        logger.info(
+            "get_orders: success=%s status_code=%s body_len=%s",
+            result.get("success"), result.get("status_code"),
+            len(result.get("body", "")),
+        )
         if not result["success"]:
+            logger.warning("get_orders: failed — %s", result.get("error"))
             return result
 
         data = result["data"]
@@ -403,11 +427,63 @@ class BlueflyClient:
                 pass
 
         if isinstance(data, dict):
-            if data.get("Status") == "Complete":
+            status_val = data.get("Status", "")
+            pending_uri = data.get("PendingUri")
+
+            if status_val == "Complete":
                 result["data"] = data.get("ResponseBody", data)
+            elif status_val == "AsyncResponsePending" and pending_uri:
+                logger.info("get_orders: async pending — polling PendingUri for status=%s", status)
+                for poll in range(max_poll):
+                    time.sleep(poll_interval)
+                    poll_result = self._get(pending_uri)
+                    if not poll_result["success"]:
+                        logger.warning("get_orders: poll %d failed — %s", poll + 1, poll_result.get("error"))
+                        return poll_result
+
+                    poll_data = poll_result["data"]
+                    # Double-encoded check on poll response
+                    if isinstance(poll_data, list) and len(poll_data) == 1 and isinstance(poll_data[0], str):
+                        try:
+                            poll_data = json.loads(poll_data[0])
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+
+                    if isinstance(poll_data, dict):
+                        poll_status = poll_data.get("Status", "")
+                        logger.info("get_orders: poll %d/%d Status=%s", poll + 1, max_poll, poll_status)
+
+                        if poll_status == "Complete":
+                            result["data"] = poll_data.get("ResponseBody", poll_data)
+                            result["body"] = poll_result["body"]
+                            break
+                        elif poll_status == "AsyncResponsePending":
+                            new_uri = poll_data.get("PendingUri")
+                            if new_uri:
+                                pending_uri = new_uri
+                            continue
+                        elif poll_data.get("Errors"):
+                            return {
+                                "status_code": poll_result["status_code"],
+                                "body": poll_result["body"],
+                                "data": poll_data,
+                                "success": False,
+                                "error": f"Rithum errors: {poll_data['Errors']}",
+                            }
+                else:
+                    logger.warning("get_orders: polling timed out after %d attempts for status=%s", max_poll, status)
+                    result["success"] = False
+                    result["error"] = f"Async polling timed out after {max_poll} attempts"
+                    return result
             elif data.get("Errors") and data["Errors"]:
                 result["success"] = False
                 result["error"] = f"Rithum errors: {data['Errors']}"
+
+        final = result["data"]
+        if isinstance(final, list):
+            logger.info("get_orders: returning %d orders for status=%s", len(final), status)
+        else:
+            logger.info("get_orders: returning data type=%s for status=%s", type(final).__name__, status)
         return result
 
     def acknowledge_order(

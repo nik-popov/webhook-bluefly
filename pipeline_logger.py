@@ -31,7 +31,10 @@ PIPELINE_STATUSES = (
     "pushed",
     "error",
     "skipped",
+    "size_error",
 )
+
+ERROR_LOG_DIR = "./pipeline_logs_errors"
 
 
 class PipelineLogger:
@@ -169,6 +172,81 @@ class PipelineLogger:
             os.remove(lock_path)
         except OSError:
             pass
+
+    def create_error_job(
+        self,
+        product_id,
+        title: str,
+        category_id: str,
+        size_errors: list[dict],
+        source: str = "dashboard",
+    ) -> str:
+        """
+        Write a product with unmappable sizes to the error folder.
+
+        Args:
+            product_id: Shopify product ID
+            title: Product title for display
+            category_id: Bluefly category ID
+            size_errors: List of {variant_id, shopify_size, field_name, error}
+            source: Where the push originated
+
+        Returns the error job file path.
+        """
+        error_dir = os.path.join(
+            os.path.dirname(self.log_dir), "pipeline_logs_errors"
+        )
+        now = datetime.now(timezone.utc)
+        today = now.strftime("%Y-%m-%d")
+        day_dir = os.path.join(error_dir, today)
+        os.makedirs(day_dir, exist_ok=True)
+
+        ts = now.strftime("%Y%m%dT%H%M%SZ")
+        job_id = f"{ts}_product_{product_id}"
+        record = {
+            "job_id": job_id,
+            "product_id": product_id,
+            "title": title,
+            "category_id": category_id,
+            "source": source,
+            "created_at": now.isoformat(),
+            "status": "size_error",
+            "size_errors": size_errors,
+        }
+
+        file_path = os.path.join(day_dir, f"{job_id}.json")
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(record, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+
+        return file_path
+
+    def get_error_jobs(self) -> list[dict]:
+        """Return all size-error jobs from the error folder, newest first."""
+        error_dir = os.path.join(
+            os.path.dirname(self.log_dir), "pipeline_logs_errors"
+        )
+        pattern = os.path.join(error_dir, "*", "*.json")
+        results = []
+        for fpath in sorted(glob.glob(pattern), reverse=True):
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    record = json.load(f)
+                record["_file"] = fpath
+                results.append(record)
+            except (json.JSONDecodeError, OSError):
+                continue
+        return results
+
+    def delete_error_job(self, file_path: str) -> bool:
+        """Remove a resolved error job file."""
+        try:
+            os.remove(file_path)
+            return True
+        except OSError:
+            return False
 
     def get_jobs_by_status(self, status: str, date: str = None) -> list[dict]:
         """

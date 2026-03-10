@@ -122,7 +122,7 @@
     text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border);
     background: #f9fafb; white-space: nowrap;
   }
-  td { padding: 10px 16px; font-size: 13px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  td { padding: 10px 16px; font-size: 13px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
   tr:last-child td { border-bottom: none; }
   tr:hover { background: #f9fafb; }
   .badge {
@@ -238,6 +238,7 @@
   <button class="tab-btn" data-tab="unpublished">Not Published</button>
   <button class="tab-btn" data-tab="events">Events</button>
   <button class="tab-btn" data-tab="mapping">Field Mapping</button>
+  <button class="tab-btn" data-tab="sizes">Size Conversions</button>
   <button class="tab-btn" data-tab="orders">Orders</button>
   <button class="tab-btn" data-tab="catalog">Catalog</button>
   <button class="tab-btn" data-tab="settings">Settings</button>
@@ -291,12 +292,20 @@
     <select id="pub-status-filter" onchange="filterPublished()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
       <option value="">All statuses</option>
       <option value="pushed">Pushed</option>
+      <option value="size_error">Size Error</option>
       <option value="error">Error</option>
       <option value="skipped">Skipped</option>
     </select>
     <button class="btn btn-primary" onclick="loadPublished(true)">Refresh</button>
     <button class="btn btn-outline" id="reset-selected-btn" onclick="resetSelectedSync()" disabled>Reset Selected (<span id="pub-selected-count">0</span>)</button>
+    <button class="btn btn-danger" id="delete-selected-btn" onclick="deleteSelectedProducts()" disabled>Delete Selected</button>
+    <button class="btn btn-danger" id="delete-all-btn" onclick="deleteAllPublished()" title="Delete all from portal + reset all pipeline logs">Delete All</button>
     <span id="pub-count-label" style="font-size:13px;color:var(--text-muted);"></span>
+  </div>
+  <div id="pub-delete-progress" style="display:none;margin-bottom:12px;">
+    <div class="progress-bar"><div class="progress-fill" id="pub-delete-fill"></div></div>
+    <div id="pub-delete-status" style="font-size:13px;margin-top:4px;color:var(--text-muted);"></div>
+    <div id="pub-delete-log" class="stream-log" style="display:none;"></div>
   </div>
   <div id="catalog-debug" style="display:none;margin-bottom:12px;">
     <details>
@@ -309,8 +318,8 @@
       <thead>
         <tr>
           <th><input type="checkbox" id="pub-select-all" onchange="togglePubSelectAll(this.checked)" title="Select all visible rows"></th>
-          <th></th><th>Title</th><th>Vendor</th><th>Category</th>
-          <th>Variants</th><th>Bluefly Price</th><th>Qty</th><th>Push Status</th><th>Live Status</th><th>Actions</th>
+          <th></th><th>Title</th><th>Vendor</th><th>Category</th><th>Size Field</th>
+          <th>Variants</th><th>Bluefly Price</th><th>Qty</th><th>Push Status</th><th>Size Errors</th><th>Live Status</th><th>Actions</th>
         </tr>
       </thead>
       <tbody id="published-tbody"></tbody>
@@ -349,7 +358,7 @@
       <thead>
         <tr>
           <th><input type="checkbox" id="unpub-select-all" onchange="toggleSelectAll(this.checked)" title="Select all visible eligible rows"></th>
-          <th></th><th>Title</th><th>Vendor</th><th>Category</th>
+          <th></th><th>Title</th><th>Vendor</th><th>Category</th><th>Size Field</th>
           <th>Variants</th><th>Bluefly Price</th><th>Qty</th><th>Eligible</th><th>Actions</th>
         </tr>
       </thead>
@@ -396,7 +405,6 @@
   <div id="mapping-error" class="error-banner"></div>
 
   <div class="toolbar" style="margin-bottom:12px">
-    <a href="http://3.150.206.227/bluefly/conversion" target="_blank" class="link-external">Open BlueFly Size Conversion Tool &rarr;</a>
     <button class="btn btn-sm" onclick="loadFieldMapping()">Refresh</button>
   </div>
 
@@ -441,7 +449,7 @@
       <label>Return Policy</label>
       <select id="default-is-returnable">
         <option>Returnable</option>
-        <option>Not Returnable</option>
+        <option>NotReturnable</option>
       </select>
     </div>
     <div class="form-row">
@@ -528,6 +536,40 @@
   </div>
 </div>
 
+<!-- ============ TAB: Size Conversions ============ -->
+<div id="tab-sizes" class="tab-content">
+  <div id="sizes-error" class="error-banner"></div>
+  <div class="toolbar" style="margin-bottom:12px">
+    <a href="http://3.150.206.227/bluefly/conversion" target="_blank" class="link-external">Open BlueFly Size Conversion Tool &rarr;</a>
+    <button class="btn btn-sm" onclick="loadSizeConversions()">Refresh</button>
+  </div>
+
+  <div class="settings-group">
+    <h3>Size Conversions</h3>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
+      Conversion tables used when Shopify sizes don't match Bluefly's allowed values.
+      Edit mappings below and click Save.
+    </p>
+    <div id="size-mappings-container"></div>
+    <div class="form-row" style="margin-top:12px">
+      <button class="btn btn-primary" onclick="saveSizeMappings()">Save Size Mappings</button>
+      <span id="size-mappings-status" style="margin-left:12px;font-size:13px"></span>
+    </div>
+
+    <h3 style="margin-top:24px">Brand Size Conversions</h3>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
+      Brand-specific conversion tables keyed by ff_size_scale label.
+      Maps IT/UK/EU sizes &rarr; US sizes before standard resolution.
+    </p>
+    <div id="brand-conversions-container"></div>
+    <div class="form-row" style="margin-top:12px;gap:8px;display:flex;align-items:center">
+      <button class="btn btn-primary" onclick="saveBrandConversions()">Save Brand Conversions</button>
+      <button class="btn btn-outline" onclick="addBrandTable()">+ Add Brand Table</button>
+      <span id="brand-conversions-status" style="margin-left:12px;font-size:13px"></span>
+    </div>
+  </div>
+</div>
+
 <!-- ============ TAB: Settings ============ -->
 <div id="tab-settings" class="tab-content">
   <div id="settings-error" class="error-banner"></div>
@@ -570,6 +612,13 @@
         <span class="hint">(at least one product image must exist)</span>
       </label>
     </div>
+    <div class="toggle-row">
+      <label>
+        <input type="checkbox" id="elig-brand-product-id" checked>
+        Require Brand Product ID
+        <span class="hint">(custom.brand_product_id metafield — prevents generic SKUs)</span>
+      </label>
+    </div>
     <button class="btn btn-primary btn-sm" onclick="saveEligibility()" style="margin-top:8px;">Save Eligibility</button>
   </div>
 
@@ -580,6 +629,16 @@
     <div class="info-row"><span class="info-label">Webhook Log Dir:</span> <span id="info-logdir">--</span></div>
     <div class="info-row"><span class="info-label">Pipeline Log Dir:</span> <span id="info-pipedir">--</span></div>
   </div>
+
+  <div class="settings-group">
+    <h3>Puppet Vendors Portal</h3>
+    <div class="form-row" style="align-items:center;gap:8px;">
+      <label>Session Cookie (connect.sid)</label>
+      <input type="text" id="portal-cookie" placeholder="s%3A..." style="min-width:400px;font-family:monospace;font-size:12px;">
+      <button class="btn btn-primary btn-sm" onclick="savePortalCookie()">Save</button>
+    </div>
+    <p style="font-size:11px;color:var(--text-muted);margin-top:4px;">Copy from browser DevTools → Application → Cookies → connect.sid value</p>
+  </div>
 </div>
 
 <!-- ============ TAB: Orders ============ -->
@@ -588,10 +647,10 @@
   <div class="toolbar">
     <select id="order-status-filter" onchange="filterOrders()">
       <option value="">All</option>
-      <option value="ReleasedForShipment">Released For Shipment</option>
-      <option value="Acknowledged">Acknowledged</option>
-      <option value="Shipped">Shipped</option>
-      <option value="Cancelled">Cancelled</option>
+      <option value="releasedforshipment">Released For Shipment</option>
+      <option value="acknowledged">Acknowledged</option>
+      <option value="shipped">Shipped</option>
+      <option value="cancelled">Cancelled</option>
     </select>
     <input type="text" id="order-search" placeholder="Search orders..." oninput="filterOrders()" style="width:200px">
     <button class="btn btn-outline btn-sm" onclick="loadOrders()">Refresh</button>
@@ -665,9 +724,8 @@
 
 <!-- ============ TAB: Catalog ============ -->
 <div id="tab-catalog" class="tab-content">
-  <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem">
-    <h2 style="margin:0">Bluefly Catalog</h2>
-    <span id="live-catalog-match-summary" style="color:var(--text-muted);font-size:0.875rem"></span>
+  <div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem">
+    <span id="live-catalog-match-summary" style="color:var(--text-muted);font-size:0.8rem"></span>
   </div>
   <div class="toolbar" style="margin-bottom:12px;">
     <input type="text" id="live-catalog-search" placeholder="Search catalog…" style="min-width:240px;" oninput="filterLiveCatalog()">
@@ -682,7 +740,6 @@
       <option value="orphan">Orphan</option>
     </select>
     <button class="btn btn-primary" onclick="loadCatalogTab(true)">Refresh</button>
-    <button class="btn btn-danger" id="delist-all-btn" onclick="delistAll()" title="Set every Bluefly catalog product to NotLive (delist from sale)">Delist All</button>
     <span id="live-catalog-count-label" style="font-size:13px;color:var(--text-muted);"></span>
   </div>
   <div id="delist-progress" style="display:none;margin-bottom:12px;">
@@ -691,11 +748,11 @@
     <div id="delist-log" style="display:none;max-height:140px;overflow-y:auto;font-size:12px;font-family:monospace;background:#f3f4f6;border-radius:6px;padding:8px;margin-top:6px;"></div>
   </div>
   <div style="overflow-x:auto">
-    <table class="products-table" id="live-catalog-table">
+    <table class="products-table" id="live-catalog-table" style="font-size:12px;">
       <thead>
         <tr>
-          <th>Name</th><th>Brand</th><th>SKU</th>
-          <th>Variants</th><th>Qty</th><th>Listing Status</th><th>Shopify Match</th>
+          <th style="padding:4px 6px;">Name</th><th style="padding:4px 6px;">Brand</th><th style="padding:4px 6px;">SKU</th>
+          <th style="padding:4px 6px;">Var.</th><th style="padding:4px 6px;">Qty</th><th style="padding:4px 6px;">Status</th><th style="padding:4px 6px;">Match</th>
         </tr>
       </thead>
       <tbody id="live-catalog-tbody"></tbody>
@@ -758,6 +815,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     if (tab === 'unpublished') loadUnpublished(false);
     if (tab === 'events') loadEvents();
     if (tab === 'mapping') loadFieldMapping();
+    if (tab === 'sizes') loadSizeConversions();
     if (tab === 'orders') loadOrders();
     if (tab === 'catalog') loadCatalogTab(false);
     if (tab === 'settings') loadSettings();
@@ -845,6 +903,7 @@ let _priceAdj = 0;
 let _eligibility = {};
 let _catalogProducts = [];
 let _shopifySkuSet = new Set();
+let _allShopifyProducts = [];
 let _publishedLoaded = false;
 let _publishedLoading = false;
 let _unpublishedLoaded = false;
@@ -901,14 +960,11 @@ async function loadDashboard() {
 
     // Eligible and matched require Shopify data — show from cached tab data if available
     if (_publishedLoaded && _allPublishedProducts.length) {
-      const catalogSkus = new Set();
-      for (const cp of catalog) {
-        if (cp.seller_sku) catalogSkus.add(cp.seller_sku);
-        for (const vsku of (cp.variant_skus || [])) if (vsku) catalogSkus.add(vsku);
-        for (const ssku of (cp.shopify_skus || [])) if (ssku) catalogSkus.add(ssku);
-      }
       document.getElementById('stat-matched').textContent =
-        _allPublishedProducts.filter(p => p.first_sku && catalogSkus.has(p.first_sku)).length;
+        _allPublishedProducts.filter(p => {
+          const ids = [p.first_sku, ...(p.variant_ids || [])].filter(Boolean);
+          return ids.length && catalog.some(cp => ids.some(id => _catalogMatchesProduct(cp, id)));
+        }).length;
     } else {
       document.getElementById('stat-matched').textContent = '--';
     }
@@ -969,6 +1025,38 @@ async function _streamProducts(url, onMeta, onBatch) {
   }
 }
 
+function loadProducts(updatedProductId, patchFields) {
+  // If we have a product ID and patch data, update in-memory and re-render without re-fetching
+  if (updatedProductId && patchFields) {
+    const id = Number(updatedProductId);
+    for (const list of [_allPublishedProducts, _allUnpublishedProducts]) {
+      const p = list.find(x => x.id === id);
+      if (p) Object.assign(p, patchFields);
+    }
+    // Re-render current page in-place (no fetch, no flicker, same page)
+    const pubTab = document.getElementById('tab-published');
+    if (pubTab && pubTab.classList.contains('active')) {
+      renderPublishedPage(_pageState['published'] ? _pageState['published'].page : 1);
+    } else {
+      renderUnpublishedPage(_pageState['unpublished'] ? _pageState['unpublished'].page : 1);
+    }
+    return;
+  }
+  // Full reload fallback
+  const pubTab = document.getElementById('tab-published');
+  const unpubTab = document.getElementById('tab-unpublished');
+  if (pubTab && pubTab.classList.contains('active')) {
+    _publishedLoaded = false;
+    loadPublished(true);
+  } else if (unpubTab && unpubTab.classList.contains('active')) {
+    _unpublishedLoaded = false;
+    loadUnpublished(true);
+  } else {
+    _publishedLoaded = false;
+    _unpublishedLoaded = false;
+  }
+}
+
 async function loadPublished(force = true) {
   if (_publishedLoading) return;
   if (!force && _publishedLoaded && _allPublishedProducts.length) {
@@ -994,7 +1082,11 @@ async function loadPublished(force = true) {
     _priceAdj = data.price_adjustment_pct || 0;
     _eligibility = data.eligibility || {};
     _shopifyStore = data.store || '';
-    _shopifySkuSet = new Set(_allPublishedProducts.map(p => p.first_sku).filter(Boolean));
+    _shopifySkuSet = new Set();
+    for (const p of _allPublishedProducts) {
+      if (p.first_sku) _shopifySkuSet.add(p.first_sku);
+      for (const vid of (p.variant_ids || [])) _shopifySkuSet.add(vid);
+    }
     _publishedLoaded = true;
     _publishedLoading = false;
 
@@ -1020,7 +1112,7 @@ async function loadPublished(force = true) {
   } catch (e) {
     _publishedLoading = false;
     showError('published-error', e.message);
-    document.getElementById('published-tbody').innerHTML = emptyHTML(10, 'Could not load products');
+    document.getElementById('published-tbody').innerHTML = emptyHTML(11, 'Could not load products');
   }
 }
 
@@ -1075,7 +1167,7 @@ async function loadUnpublished(force = true) {
   } catch (e) {
     _unpublishedLoading = false;
     showError('unpublished-error', e.message);
-    document.getElementById('unpublished-tbody').innerHTML = emptyHTML(9, 'Could not load products');
+    document.getElementById('unpublished-tbody').innerHTML = emptyHTML(10, 'Could not load products');
   }
 }
 
@@ -1091,8 +1183,9 @@ function filterPublished() {
   const status = document.getElementById('pub-status-filter').value;
   _publishedProducts = _allPublishedProducts.filter(p => {
     if (q && !_matchesSearch(p, q)) return false;
+    if (status === 'size_error' && p.sync_status !== 'size_error' && !(p.size_errors && p.size_errors.length)) return false;
     if (status === 'error' && !p.invalid && p.sync_status !== 'error') return false;
-    if (status && status !== 'error' && p.sync_status !== status) return false;
+    if (status && status !== 'error' && status !== 'size_error' && p.sync_status !== status) return false;
     return true;
   });
   _pageState['published'] = { page: 1 };
@@ -1121,7 +1214,10 @@ function filterUnpublished() {
 function _updatePublishedCounts() {
   const adj = _priceAdj ? ` (${_priceAdj > 0 ? '+' : ''}${_priceAdj}%)` : '';
   document.getElementById('published-count').textContent = _allPublishedProducts.length;
-  const matchedCount = _allPublishedProducts.filter(p => p.first_sku && _catalogBySku[p.first_sku]).length;
+  const matchedCount = _allPublishedProducts.filter(p => {
+    const ids = [p.first_sku, ...(p.variant_ids || [])].filter(Boolean);
+    return ids.length && _catalogProducts.some(cp => ids.some(id => _catalogMatchesProduct(cp, id)));
+  }).length;
   document.getElementById('catalog-matched-count').textContent = matchedCount;
   const showing = _publishedProducts.length !== _allPublishedProducts.length
     ? `${_publishedProducts.length} of ${_allPublishedProducts.length}${adj}`
@@ -1138,6 +1234,20 @@ function _updateUnpublishedCounts() {
   document.getElementById('unpub-count-label').textContent = showing + ' products';
 }
 
+function _catalogMatchesProduct(cp, productId) {
+  if (!productId) return false;
+  const allSkus = [cp.seller_sku, ...(cp.variant_skus || []), ...(cp.shopify_skus || [])].filter(Boolean);
+  return allSkus.some(s => s.includes(productId));
+}
+
+function _findCatalogEntry(p) {
+  const ids = [p.first_sku, ...(p.variant_ids || [])].filter(Boolean);
+  for (const id of ids) {
+    if (_catalogBySku[id]) return _catalogBySku[id];
+  }
+  return _catalogProducts.find(cp => ids.some(id => _catalogMatchesProduct(cp, id))) || null;
+}
+
 function _buildCatalogIndex() {
   _catalogBySku = {};
   for (const cp of _catalogProducts) {
@@ -1148,6 +1258,92 @@ function _buildCatalogIndex() {
     for (const ssku of (cp.shopify_skus || [])) {
       if (ssku) _catalogBySku[ssku] = cp;
     }
+  }
+}
+
+function _findShopifyProductForCatalog(cp) {
+  const cpSkus = [cp.seller_sku, ...(cp.variant_skus || []), ...(cp.shopify_skus || [])].filter(Boolean);
+  for (const p of _allShopifyProducts) {
+    const pIds = [String(p.id), p.first_sku, ...(p.variant_ids || [])].filter(Boolean);
+    for (const pid of pIds) {
+      if (cpSkus.some(s => s.includes(pid))) return p;
+    }
+  }
+  return null;
+}
+
+async function claimCatalogProduct(productId, el) {
+  el.disabled = true;
+  el.textContent = '…';
+  try {
+    const res = await apiFetch('/api/bluefly/catalog/claim', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({product_id: productId}),
+    });
+    if (res.success) {
+      toast(res.already ? `Product ${productId} already claimed` : `Product ${productId} claimed`);
+      // Update local sync status so button disappears on re-render
+      const sp = _allShopifyProducts.find(p => String(p.id) === String(productId));
+      if (sp) sp.sync_status = 'pushed';
+      renderLiveCatalogTable(_shopifySkuSet);
+    } else {
+      toast('Error: ' + (res.error || 'Unknown'), 'error');
+      el.disabled = false;
+      el.textContent = 'Claim';
+    }
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+    el.disabled = false;
+    el.textContent = 'Claim';
+  }
+}
+
+function _renderStatusToggle(cp) {
+  const sku = cp.seller_sku;
+  const ls = (cp.listing_status || '').toLowerCase();
+  let badgeClass = 'badge-gray';
+  if (ls === 'live') badgeClass = 'badge-success';
+  else if (ls === 'mixed') badgeClass = 'badge-warning';
+  const label = cp.listing_status || '\u2014';
+  const targetStatus = (ls === 'live') ? 'NotLive' : 'Live';
+  const title = (ls === 'live') ? 'Click to set NotLive' : 'Click to set Live';
+  const variantSkus = (cp.variants || []).map(v => v.sku).filter(Boolean);
+  const skusAttr = esc(JSON.stringify(variantSkus));
+  return `<span class="badge ${badgeClass}" style="cursor:pointer" title="${title}" data-vskus="${skusAttr}" onclick="setCatalogSkuStatus('${esc(sku)}','${targetStatus}',this)">${label}</span>`;
+}
+
+async function setCatalogSkuStatus(sellerSku, newStatus, el) {
+  if (!confirm(`Set ${sellerSku} to ${newStatus}?`)) return;
+  el.textContent = '…';
+  el.style.pointerEvents = 'none';
+  const variantSkus = JSON.parse(el.getAttribute('data-vskus') || '[]');
+  try {
+    const res = await apiFetch('/api/bluefly/catalog/set-sku-status', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({seller_sku: sellerSku, status: newStatus, variant_skus: variantSkus}),
+    });
+    if (res.success) {
+      toast(`${sellerSku} → ${newStatus}`);
+      // Optimistic update: patch local data immediately
+      const cp = _catalogProducts.find(c => c.seller_sku === sellerSku);
+      if (cp) {
+        cp.listing_status = newStatus;
+        for (const v of (cp.variants || [])) v.listing_status = newStatus;
+      }
+      renderLiveCatalogTable(_shopifySkuSet);
+      // Background refresh after delay for server-side consistency
+      setTimeout(() => { _catalogLoaded = false; loadCatalogTab(true); }, 5000);
+    } else {
+      toast('Error: ' + (res.error || 'Unknown'), 'error');
+      el.textContent = 'ERR';
+      el.style.pointerEvents = '';
+    }
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+    el.textContent = 'ERR';
+    el.style.pointerEvents = '';
   }
 }
 
@@ -1164,8 +1360,7 @@ function renderLiveCatalogTable(shopifySkuSet) {
   const rows = [];
 
   for (const cp of _catalogProducts) {
-    const isMatched = (cp.variant_skus || []).some(s => shopifySkuSet.has(s))
-                   || shopifySkuSet.has(cp.seller_sku);
+    const isMatched = [...shopifySkuSet].some(pid => _catalogMatchesProduct(cp, pid));
     if (isMatched) totalMatched++;
 
     // Apply status filter
@@ -1182,18 +1377,42 @@ function renderLiveCatalogTable(shopifySkuSet) {
     }
 
     if (isMatched) matched++;
-    const badge = isMatched
+    let badge = isMatched
       ? '<span class="badge badge-success">Matched</span>'
       : '<span class="badge badge-gray">Orphan</span>';
+    if (isMatched) {
+      const sp = _findShopifyProductForCatalog(cp);
+      if (sp && sp.sync_status !== 'pushed') {
+        badge += ` <button class="btn btn-primary" style="font-size:11px;padding:2px 8px;margin-left:4px;" onclick="claimCatalogProduct('${sp.id}',this)">Claim</button>`;
+      }
+    }
+    const variants = cp.variants || [];
+    const hasVariants = variants.length > 0;
+    const toggleId = 'cv-' + cp.seller_sku.replace(/[^a-zA-Z0-9]/g, '_');
+    const expandBtn = hasVariants
+      ? `<span style="cursor:pointer;margin-right:4px;" onclick="document.getElementById('${toggleId}').style.display = document.getElementById('${toggleId}').style.display==='none'?'':'none'" title="Show/hide variants">\u25B6</span>`
+      : '';
     rows.push(`<tr>
-      <td>${cp.name || '\u2014'}</td>
-      <td>${cp.brand || '\u2014'}</td>
-      <td><code>${cp.seller_sku}</code></td>
-      <td>${cp.buyable_count ?? '\u2014'}</td>
-      <td>${cp.total_quantity ?? '\u2014'}</td>
-      <td>${cp.listing_status || '\u2014'}</td>
-      <td>${badge}</td>
+      <td style="padding:3px 6px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${expandBtn}${cp.name || '\u2014'}</td>
+      <td style="padding:3px 6px;">${cp.brand || '\u2014'}</td>
+      <td style="padding:3px 6px;"><code style="font-size:11px;">${cp.seller_sku}</code></td>
+      <td style="padding:3px 6px;text-align:center;">${cp.buyable_count ?? '\u2014'}</td>
+      <td style="padding:3px 6px;text-align:center;">${cp.total_quantity ?? '\u2014'}</td>
+      <td style="padding:3px 6px;">${_renderStatusToggle(cp)}</td>
+      <td style="padding:3px 6px;">${badge}</td>
     </tr>`);
+    if (hasVariants) {
+      rows.push(`<tr id="${toggleId}" style="display:none"><td colspan="7" style="padding:0 0 0 2rem;background:#f9fafb;">
+        <table style="width:100%;font-size:12px;border-collapse:collapse;">
+          <tr style="color:var(--text-muted);"><th style="text-align:left;padding:4px 8px;">Variant SKU</th><th style="padding:4px 8px;">Qty</th><th style="padding:4px 8px;">Status</th><th style="padding:4px 8px;">Price</th></tr>
+          ${variants.map(v => {
+            const vls = (v.listing_status || '').toLowerCase();
+            const vBadge = vls === 'live' ? 'badge-success' : 'badge-gray';
+            return `<tr><td style="padding:3px 8px;"><code style="font-size:11px;">${esc(v.sku)}</code></td><td style="padding:3px 8px;text-align:center;">${v.quantity}</td><td style="padding:3px 8px;text-align:center;"><span class="badge ${vBadge}">${esc(v.listing_status)}</span></td><td style="padding:3px 8px;text-align:center;">${v.price || '\u2014'}</td></tr>`;
+          }).join('')}
+        </table>
+      </td></tr>`);
+    }
   }
 
   tbody.innerHTML = rows.length
@@ -1225,19 +1444,24 @@ async function loadCatalogTab(force = false) {
       _fetchCatalog(),
     ]);
     const allProds = prodData.products || [];
+    _allShopifyProducts = allProds;
     _catalogProducts = catalogData.products || [];
-    _shopifySkuSet = new Set(allProds.map(p => p.first_sku).filter(Boolean));
+    _shopifySkuSet = new Set();
+    for (const p of allProds) {
+      if (p.first_sku) _shopifySkuSet.add(p.first_sku);
+      for (const vid of (p.variant_ids || [])) _shopifySkuSet.add(vid);
+    }
     renderLiveCatalogTable(_shopifySkuSet);
   } catch (e) {
     tbody.innerHTML = emptyHTML(7, 'Could not load catalog: ' + e.message);
   }
 }
 
-async function delistAll() {
-  if (!confirm(`Delist ALL ${_catalogProducts.length} products from Bluefly? This sets every listing to NotLive.`)) return;
-  const btn = document.getElementById('delist-all-btn');
+async function deleteAllPortal() {
+  if (!confirm('Delete ALL products from Puppet Vendors portal? This cannot be undone.')) return;
+  const btn = document.getElementById('delete-all-btn');
   btn.disabled = true;
-  btn.textContent = 'Delisting…';
+  btn.textContent = 'Deleting…';
   const progressEl = document.getElementById('delist-progress');
   const fillEl = document.getElementById('delist-fill');
   const statusEl = document.getElementById('delist-status');
@@ -1248,7 +1472,149 @@ async function delistAll() {
   fillEl.style.width = '0%';
 
   try {
-    const res = await fetch(API_BASE + '/api/bluefly/catalog/delist-all', {method: 'POST', cache: 'no-store'});
+    const res = await fetch(API_BASE + '/api/bluefly/catalog/delete-all', {method: 'POST', cache: 'no-store'});
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'fetch') {
+            statusEl.textContent = `Fetching products… ${msg.fetched} found`;
+          } else if (msg.type === 'start') {
+            statusEl.textContent = `Deleting 0 / ${msg.total}…`;
+          } else if (msg.type === 'success') {
+            const pct = Math.round((msg.index / msg.total) * 100);
+            fillEl.style.width = pct + '%';
+            statusEl.textContent = `Deleting ${msg.index} / ${msg.total}…`;
+            logEl.innerHTML += `<div style="color:#16a34a">OK batch (${msg.batch_size} products)</div>`;
+          } else if (msg.type === 'error') {
+            logEl.innerHTML += `<div style="color:#dc2626">ERR: ${esc(msg.error || '')}</div>`;
+          } else if (msg.type === 'complete') {
+            fillEl.style.width = '100%';
+            statusEl.textContent = `Complete: ${msg.success} deleted, ${msg.errors} errors`;
+            toast(`Delete complete: ${msg.success} deleted, ${msg.errors} errors`);
+            _catalogLoaded = false;
+          }
+          logEl.scrollTop = logEl.scrollHeight;
+        } catch (_) {}
+      }
+    }
+  } catch (e) {
+    toast('Delete error: ' + e.message, 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = 'Delete All';
+}
+
+async function deleteAllPublished() {
+  if (!confirm('Delete ALL products from pipeline logs AND Puppet Vendors portal?\n\nThis will:\n1. Remove all pipeline logs (clear Published tab)\n2. Delete all products from the vendor portal\n\nThis cannot be undone.')) return;
+  const btn = document.getElementById('delete-all-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Deleting…';
+  const progressEl = document.getElementById('pub-delete-progress');
+  const fillEl = document.getElementById('pub-delete-fill');
+  const statusEl = document.getElementById('pub-delete-status');
+  const logEl = document.getElementById('pub-delete-log');
+  progressEl.style.display = 'block';
+  logEl.style.display = 'block';
+  logEl.innerHTML = '';
+  fillEl.style.width = '0%';
+
+  try {
+    const res = await fetch(API_BASE + '/api/products/delete-all', {method: 'POST', cache: 'no-store'});
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result = {};
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'reset') {
+            logEl.innerHTML += `<div style="color:#16a34a">${msg.count} pipeline log(s) reset</div>`;
+            statusEl.textContent = `Logs reset (${msg.count}), fetching portal products…`;
+          } else if (msg.type === 'fetch') {
+            statusEl.textContent = `Fetching portal products… ${msg.fetched} found`;
+          } else if (msg.type === 'start') {
+            statusEl.textContent = `Deleting 0 / ${msg.total} from portal…`;
+          } else if (msg.type === 'success') {
+            const pct = Math.round((msg.index / msg.total) * 100);
+            fillEl.style.width = pct + '%';
+            statusEl.textContent = `Deleting ${msg.index} / ${msg.total} from portal…`;
+          } else if (msg.type === 'error') {
+            logEl.innerHTML += `<div style="color:#dc2626">ERR: ${esc(msg.error || '')}</div>`;
+          } else if (msg.type === 'complete') {
+            result = msg;
+            fillEl.style.width = '100%';
+          }
+          logEl.scrollTop = logEl.scrollHeight;
+        } catch (_) {}
+      }
+    }
+    if (buffer.trim()) {
+      try { const msg = JSON.parse(buffer); if (msg.type === 'complete') result = msg; } catch(_) {}
+    }
+
+    const parts = [];
+    if (result.reset) parts.push(`${result.reset} log(s) reset`);
+    if (result.deleted) parts.push(`${result.deleted} deleted from portal`);
+    if (result.errors) parts.push(`${result.errors} portal error(s)`);
+    if (result.skipped) parts.push(result.skipped);
+    statusEl.textContent = 'Complete: ' + (parts.join(', ') || 'done');
+    toast(parts.join(', ') || 'Delete all complete');
+
+    // Clear published list
+    _allPublishedProducts = [];
+    _publishedProducts = [];
+    _updatePublishedCounts();
+    renderPublishedPage(1);
+    _unpublishedLoaded = false;
+  } catch (e) {
+    toast('Delete error: ' + e.message, 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = 'Delete All';
+}
+
+async function setAllLive() {
+  if (!confirm('Set ALL catalog products to Live?')) return;
+  await _bulkStatusAction('/api/bluefly/catalog/set-all-live', 'set-all-live-btn', 'Set All Live', 'set to Live');
+}
+
+async function delistAll() {
+  if (!confirm('Set ALL catalog products to NotLive?')) return;
+  await _bulkStatusAction('/api/bluefly/catalog/delist-all', 'delist-all-btn', 'Delist All', 'delisted');
+}
+
+async function _bulkStatusAction(endpoint, btnId, btnLabel, verb) {
+  const btn = document.getElementById(btnId);
+  btn.disabled = true;
+  btn.textContent = 'Working…';
+  const progressEl = document.getElementById('delist-progress');
+  const fillEl = document.getElementById('delist-fill');
+  const statusEl = document.getElementById('delist-status');
+  const logEl = document.getElementById('delist-log');
+  progressEl.style.display = 'block';
+  logEl.style.display = 'block';
+  logEl.innerHTML = '';
+  fillEl.style.width = '0%';
+
+  try {
+    const res = await fetch(API_BASE + endpoint, {method: 'POST', cache: 'no-store'});
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -1263,29 +1629,30 @@ async function delistAll() {
         try {
           const msg = JSON.parse(line);
           if (msg.type === 'start') {
-            statusEl.textContent = `Delisting 0 / ${msg.total}…`;
+            statusEl.textContent = `Processing 0 / ${msg.total}…`;
           } else if (msg.type === 'success') {
             const pct = Math.round((msg.index / msg.total) * 100);
             fillEl.style.width = pct + '%';
-            statusEl.textContent = `Delisting ${msg.index} / ${msg.total}…`;
+            statusEl.textContent = `Processing ${msg.index} / ${msg.total}…`;
             logEl.innerHTML += `<div style="color:#16a34a">OK ${esc(msg.sku)}</div>`;
           } else if (msg.type === 'error') {
             logEl.innerHTML += `<div style="color:#dc2626">ERR ${esc(msg.sku || '')}: ${esc(msg.error || '')}</div>`;
           } else if (msg.type === 'complete') {
             fillEl.style.width = '100%';
-            statusEl.textContent = `Complete: ${msg.success} delisted, ${msg.errors} errors`;
-            toast(`Delist complete: ${msg.success} delisted, ${msg.errors} errors`);
+            statusEl.textContent = `Complete: ${msg.success} ${verb}, ${msg.errors} errors`;
+            toast(`${btnLabel} complete: ${msg.success} ${verb}, ${msg.errors} errors`);
             _catalogLoaded = false;
+            loadCatalogTab(true);
           }
           logEl.scrollTop = logEl.scrollHeight;
         } catch (_) {}
       }
     }
   } catch (e) {
-    toast('Delist error: ' + e.message, 'error');
+    toast(btnLabel + ' error: ' + e.message, 'error');
   }
   btn.disabled = false;
-  btn.textContent = 'Delist All';
+  btn.textContent = btnLabel;
 }
 
 function renderPublishedPage(page) {
@@ -1317,7 +1684,7 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
     if (resetBtn) resetBtn.disabled = true;
   }
   if (!products.length) {
-    tbody.innerHTML = emptyHTML(isPublished ? 11 : 9, emptyMsg || 'No products');
+    tbody.innerHTML = emptyHTML(isPublished ? 13 : 10, emptyMsg || 'No products');
     return;
   }
   tbody.innerHTML = products.map(p => {
@@ -1327,6 +1694,7 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
 
     let statusBadge;
     if (p.invalid) statusBadge = '<span class="badge badge-error" title="' + (p.invalid_reason || '') + '">Error</span>';
+    else if (p.sync_status === 'size_error') statusBadge = '<span class="badge badge-error" title="Size mapping errors — fix size field or add conversion">Size Error</span>';
     else if (p.sync_status === 'pushed') statusBadge = '<span class="badge badge-success">Pushed</span>';
     else if (p.sync_status === 'error') statusBadge = '<span class="badge badge-error">Error</span>';
     else if (p.sync_status === 'skipped') statusBadge = '<span class="badge badge-warning">Skipped</span>';
@@ -1335,7 +1703,7 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
     // Live catalog status via SKU join
     let liveStatusCell = '';
     if (isPublished) {
-      const catData = p.first_sku ? _catalogBySku[p.first_sku] : null;
+      const catData = _findCatalogEntry(p);
       if (catData) {
         const ls = (catData.listing_status || '').toLowerCase();
         if (ls === 'live') liveStatusCell = '<span class="badge badge-success">Live</span>';
@@ -1349,7 +1717,7 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
 
     let actions;
     if (isPublished) {
-      const catEntry = p.first_sku ? _catalogBySku[p.first_sku] : null;
+      const catEntry = _findCatalogEntry(p);
       const shopifyQty = p.total_quantity ?? 0;
       const catalogQty = catEntry ? (catEntry.total_quantity ?? null) : null;
       const qtyMismatch = catalogQty !== null && shopifyQty !== catalogQty;
@@ -1357,8 +1725,7 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
       const syncTitle = qtyMismatch
         ? `Qty mismatch: Shopify=${shopifyQty}, Bluefly=${catalogQty}. Click to sync.`
         : 'Sync qty+price to Bluefly';
-      actions = `<button class="btn btn-primary btn-sm" onclick="pushProduct(${p.id}, this)" title="Re-push">Re-push</button>
-                 <button class="btn ${syncBtnClass} btn-sm" onclick="syncQtyPrice(${p.id}, this)" title="${syncTitle}">Sync</button>
+      actions = `<button class="btn ${syncBtnClass} btn-sm" onclick="syncQtyPrice(${p.id}, this)" title="${syncTitle}">Sync</button>
                  <button class="btn btn-outline btn-sm" onclick="resetSync(${p.id}, this)" title="Remove from Published (clears sync log)">Reset</button>`;
     } else {
       actions = `<button class="btn btn-primary btn-sm" onclick="pushProduct(${p.id}, this)" title="Push to Bluefly">Push</button>`;
@@ -1374,23 +1741,49 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
       priceDisplay = '$' + parseFloat(p.first_price).toFixed(2);
     }
 
+    // Size errors column (published tab only)
+    let sizeErrCol = '';
+    if (isPublished) {
+      if (p.size_errors && p.size_errors.length) {
+        const n = p.size_errors.length;
+        const hasSuggestion = p.size_errors.some(e => e.suggestion);
+        const details = p.size_errors.map(e => {
+          let line = `${e.shopify_size} \u2192 ${e.field_name}: ${e.error}`;
+          if (e.suggestion) line += `\n  \u26a0 ${e.suggestion}`;
+          return line;
+        }).join('\n\n');
+        const badgeClass = hasSuggestion ? 'badge-error' : 'badge-warning';
+        const label = hasSuggestion ? `${n} miscat.` : `${n} variant${n > 1 ? 's' : ''}`;
+        sizeErrCol = `<td><span class="badge ${badgeClass}" title="${esc(details)}" style="cursor:help">${label}</span></td>`;
+      } else {
+        sizeErrCol = '<td><span style="color:var(--text-muted)">—</span></td>';
+      }
+    }
+
     const liveCol = isPublished ? `<td>${liveStatusCell}</td>` : '';
     const chkCol = isPublished
       ? `<td><input type="checkbox" class="pub-row-chk" data-id="${p.id}" onchange="updatePubSelectedCount()"></td>`
       : '';
     return `<tr>
       ${chkCol}<td>${img}</td>
-      <td><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:inherit;"><strong>${esc(p.title)}</strong></a><br><span style="font-size:11px;color:var(--text-muted)">ID: ${p.id}</span></td>
+      <td style="white-space:normal;min-width:200px"><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:inherit;"><strong>${esc(p.title)}</strong></a><br><span style="font-size:11px;color:var(--text-muted)">ID: ${p.id}</span></td>
       <td>${esc(p.vendor)}</td>
-      <td>${esc(p.bluefly_category || '-')}</td>
+      <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editCategory(${p.id}, '${esc(p.bluefly_category || '')}')">
+        <span class="cat-cell" data-catid="${esc(p.bluefly_category || '')}">${esc(p.bluefly_category || '-')}</span>${p.category_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Category overridden">&#9733;</span>' : ''}
+      </td>
+      <td style="cursor:pointer;text-decoration:underline dotted;font-size:12px;" onclick="editSizeField(${p.id}, '${esc(p.size_field || '')}', '${esc(p.bluefly_category || '')}')">
+        ${esc(p.size_field || '-')}${p.size_field_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Size field overridden">&#9733;</span>' : ''}
+      </td>
       <td>${p.variant_count}</td>
       <td>${priceDisplay}</td>
       <td>${p.total_quantity}</td>
       <td>${statusBadge}</td>
+      ${sizeErrCol}
       ${liveCol}
       <td style="white-space:nowrap;">${actions}</td>
     </tr>`;
   }).join('');
+  setTimeout(enrichCategoryCells, 0);
 }
 
 function renderUnpublishedTable(tbodyId, products, emptyMsg) {
@@ -1400,7 +1793,7 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
   document.getElementById('selected-count').textContent = '0';
   document.getElementById('push-selected-btn').disabled = true;
   if (!products.length) {
-    tbody.innerHTML = emptyHTML(9, emptyMsg || 'No products');
+    tbody.innerHTML = emptyHTML(10, emptyMsg || 'No products');
     return;
   }
   tbody.innerHTML = products.map(p => {
@@ -1425,6 +1818,7 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
     if (!p.has_images) issues.push('No images');
     if (p.has_images && p.valid_image_format === false) issues.push('Bad image format');
     if (!p.has_quantity) issues.push('Qty = 0');
+    if (!p.brand_product_id) issues.push('No brand product ID');
     const eligBadge = p.push_eligible
       ? '<span class="badge badge-success">Ready</span>'
       : `<span class="badge badge-warning" title="${esc(issues.join(', '))}">${esc(issues.join(', ') || 'Ineligible')}</span>`;
@@ -1439,9 +1833,14 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
     return `<tr>
       <td>${chk}</td>
       <td>${img}</td>
-      <td><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:inherit;"><strong>${esc(p.title)}</strong></a><br><span style="font-size:11px;color:var(--text-muted)">ID: ${p.id}</span></td>
+      <td style="white-space:normal;min-width:200px"><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:inherit;"><strong>${esc(p.title)}</strong></a><br><span style="font-size:11px;color:var(--text-muted)">ID: ${p.id}</span></td>
       <td>${esc(p.vendor)}</td>
-      <td>${esc(p.bluefly_category || '-')}</td>
+      <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editCategory(${p.id}, '${esc(p.bluefly_category || '')}')">
+        <span class="cat-cell" data-catid="${esc(p.bluefly_category || '')}">${esc(p.bluefly_category || '-')}</span>${p.category_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Category overridden">&#9733;</span>' : ''}
+      </td>
+      <td style="cursor:pointer;text-decoration:underline dotted;font-size:12px;" onclick="editSizeField(${p.id}, '${esc(p.size_field || '')}', '${esc(p.bluefly_category || '')}')">
+        ${esc(p.size_field || '-')}${p.size_field_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Size field overridden">&#9733;</span>' : ''}
+      </td>
       <td>${p.variant_count}</td>
       <td>${priceDisplay}</td>
       <td>${p.total_quantity}</td>
@@ -1449,6 +1848,7 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
       <td style="white-space:nowrap;">${pushBtn}</td>
     </tr>`;
   }).join('');
+  setTimeout(enrichCategoryCells, 0);
 }
 
 function updateSelectedCount() {
@@ -1493,6 +1893,192 @@ async function pushSelected() {
   btn.disabled = true;
   toast(`Pushed ${done} of ${ids.length} products`);
   loadUnpublished(true); _publishedLoaded = false;
+}
+
+let _categoryMap = null;
+// Load category map eagerly for display enrichment
+fetch('/api/category-list').then(r => r.json()).then(m => {
+  _categoryMap = m;
+  enrichCategoryCells();
+});
+
+function enrichCategoryCells() {
+  if (!_categoryMap) return;
+  document.querySelectorAll('.cat-cell').forEach(el => {
+    const id = el.dataset.catid;
+    const path = _categoryMap[id];
+    if (path && !el.dataset.enriched) {
+      const last = path.split('/').pop().replace(/-/g, ' ');
+      el.title = id + ' — ' + path;
+      el.textContent = id + ' ' + last;
+      el.dataset.enriched = '1';
+    }
+  });
+}
+
+// ---- Size Field picker ----
+let _sizeFieldList = null;
+fetch('/api/size-field-list').then(r => r.json()).then(list => { _sizeFieldList = list; });
+
+function editSizeField(productId, currentField, categoryId) {
+  const load = _sizeFieldList ? Promise.resolve(_sizeFieldList) : fetch('/api/size-field-list').then(r => r.json()).then(l => { _sizeFieldList = l; return l; });
+  load.then(fields => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999;';
+    const card = document.createElement('div');
+    card.style.cssText = 'background:var(--bg-card,#fff);border-radius:8px;padding:20px;width:450px;max-height:70vh;display:flex;flex-direction:column;';
+    card.innerHTML = `
+      <h3 style="margin:0 0 12px">Select Size Field</h3>
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <input id="sf-search" type="text" placeholder="Search size fields..." style="flex:1;padding:6px 10px;border:1px solid var(--border,#ddd);border-radius:4px;" autofocus>
+        <button onclick="this.closest('div').parentElement.parentElement.remove()" style="padding:6px 12px;cursor:pointer;border:1px solid var(--border,#ddd);border-radius:4px;background:none;">Cancel</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Current: <strong>${currentField || 'auto (from category)'}</strong>${categoryId ? ' &nbsp;|&nbsp; Category: <strong>' + categoryId + '</strong>' : ''}</div>
+      <div id="sf-list" style="overflow-y:auto;flex:1;border:1px solid var(--border,#ddd);border-radius:4px;max-height:400px;"></div>
+      <button id="sf-remove-btn" style="margin-top:8px;padding:6px;cursor:pointer;border:1px solid var(--border,#ddd);border-radius:4px;background:none;color:#c00;">Remove Override (use category default)</button>
+    `;
+    overlay.appendChild(card);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+
+    const listEl = document.getElementById('sf-list');
+    const searchEl = document.getElementById('sf-search');
+
+    function renderList(filter) {
+      const f = (filter || '').toLowerCase();
+      const matches = f ? fields.filter(sf => sf.field_name.includes(f) || sf.display_name.toLowerCase().includes(f)) : fields;
+      // Sort: valid fields first, then invalid
+      const sorted = [...matches].sort((a, b) => {
+        if (!categoryId) return 0;
+        const aValid = a.target_ids && a.target_ids.includes(categoryId);
+        const bValid = b.target_ids && b.target_ids.includes(categoryId);
+        if (aValid === bValid) return 0;
+        return aValid ? -1 : 1;
+      });
+      listEl.innerHTML = sorted.map(sf => {
+        const isCurrent = sf.field_name === currentField;
+        const isValid = !categoryId || (sf.target_ids && sf.target_ids.includes(categoryId));
+        // Find the category-default field (first valid match)
+        const isDefault = categoryId && isValid && sorted.find(s => s.target_ids && s.target_ids.includes(categoryId))?.field_name === sf.field_name;
+        if (isValid) {
+          return `<div class="sf-item" data-field="${sf.field_name}" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--border,#eee);font-size:13px;${isCurrent ? 'background:var(--accent-bg,#e8f0fe);' : ''}"
+                onmouseover="this.style.background='var(--accent-bg,#e8f0fe)'" onmouseout="this.style.background='${isCurrent ? 'var(--accent-bg,#e8f0fe)' : ''}'">
+            <strong>${sf.field_name}</strong> <span style="color:var(--text-muted)">${sf.display_name}</span>${isDefault ? ' <span style="color:var(--accent);font-size:10px;font-weight:600;">(recommended)</span>' : ''}
+          </div>`;
+        } else {
+          return `<div style="padding:6px 10px;border-bottom:1px solid var(--border,#eee);font-size:13px;opacity:0.4;cursor:not-allowed;" title="Not valid for category ${categoryId}">
+            <strong>${sf.field_name}</strong> <span style="color:var(--text-muted)">${sf.display_name}</span> <span style="font-size:10px;">&#128274;</span>
+          </div>`;
+        }
+      }).join('');
+    }
+    renderList('');
+    searchEl.addEventListener('input', () => renderList(searchEl.value));
+    searchEl.focus();
+
+    function saveOverride(fieldName) {
+      fetch('/api/size-field-overrides').then(r => r.json()).then(overrides => {
+        if (fieldName) overrides[String(productId)] = fieldName;
+        else delete overrides[String(productId)];
+        return fetch('/api/size-field-overrides', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(overrides) });
+      }).then(() => {
+        overlay.remove();
+        // Find display name from cached list
+        const info = (_sizeFieldList || []).find(sf => sf.field_name === fieldName);
+        loadProducts(productId, {
+          size_field: fieldName || null,
+          size_field_display: info ? info.display_name : fieldName,
+          size_field_overridden: !!fieldName,
+        });
+      });
+    }
+
+    listEl.addEventListener('click', e => {
+      const item = e.target.closest('.sf-item');
+      if (item) saveOverride(item.dataset.field);
+    });
+    document.getElementById('sf-remove-btn').addEventListener('click', () => saveOverride(null));
+  });
+}
+
+// ---- Category picker ----
+function editCategory(productId, currentCat) {
+  const load = _categoryMap ? Promise.resolve(_categoryMap) : fetch('/api/category-list').then(r => r.json()).then(m => { _categoryMap = m; return m; });
+  load.then(catMap => {
+    // Build modal
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999;';
+    const card = document.createElement('div');
+    card.style.cssText = 'background:var(--bg-card,#fff);border-radius:8px;padding:20px;width:500px;max-height:70vh;display:flex;flex-direction:column;';
+    card.innerHTML = `
+      <h3 style="margin:0 0 12px">Select Category</h3>
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <input id="cat-search" type="text" placeholder="Search by name or ID..." style="flex:1;padding:6px 10px;border:1px solid var(--border,#ddd);border-radius:4px;" autofocus>
+        <button onclick="this.closest('div').parentElement.parentElement.remove()" style="padding:6px 12px;cursor:pointer;border:1px solid var(--border,#ddd);border-radius:4px;background:none;">Cancel</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Current: <strong>${currentCat || 'none'}</strong>${catMap[currentCat] ? ' — ' + catMap[currentCat] : ''}</div>
+      <div id="cat-list" style="overflow-y:auto;flex:1;border:1px solid var(--border,#ddd);border-radius:4px;max-height:400px;"></div>
+      <button id="cat-remove-btn" style="margin-top:8px;padding:6px;cursor:pointer;border:1px solid var(--border,#ddd);border-radius:4px;background:none;color:#c00;">Remove Override</button>
+    `;
+    overlay.appendChild(card);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+
+    // Sort by relevance: categories sharing more path segments with current rank higher
+    const curPath = catMap[currentCat] || '';
+    const curParts = curPath ? curPath.split('/') : [];
+    function relevance(path) {
+      const parts = path.split('/');
+      let shared = 0;
+      for (let i = 0; i < Math.min(curParts.length, parts.length); i++) {
+        if (curParts[i] === parts[i]) shared++; else break;
+      }
+      return shared;
+    }
+    const entries = Object.entries(catMap).sort((a, b) => {
+      const ra = relevance(a[1]), rb = relevance(b[1]);
+      if (ra !== rb) return rb - ra;
+      return a[1].localeCompare(b[1]);
+    });
+    const listEl = document.getElementById('cat-list');
+    const searchEl = document.getElementById('cat-search');
+
+    function renderList(filter) {
+      const f = (filter || '').toLowerCase();
+      const matches = f ? entries.filter(([id, path]) => id.includes(f) || path.toLowerCase().includes(f)) : entries;
+      listEl.innerHTML = matches.slice(0, 100).map(([id, path]) => {
+        const rel = relevance(path);
+        const relDot = rel > 0 ? '<span style="color:var(--accent);margin-right:4px;" title="' + rel + ' shared segments">' + '●'.repeat(Math.min(rel, 4)) + '</span>' : '';
+        return `<div class="cat-item" data-id="${id}" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--border,#eee);font-size:13px;${id === currentCat ? 'background:var(--accent-bg,#e8f0fe);' : ''}"
+              onmouseover="this.style.background='var(--accent-bg,#e8f0fe)'" onmouseout="this.style.background='${id === currentCat ? 'var(--accent-bg,#e8f0fe)' : ''}'">
+          ${relDot}<strong>${id}</strong> <span style="color:var(--text-muted)">${path}</span>
+        </div>`;
+      }).join('') + (matches.length > 100 ? '<div style="padding:6px 10px;color:var(--text-muted);font-size:12px;">...and ' + (matches.length - 100) + ' more — refine your search</div>' : '');
+    }
+    renderList('');
+    searchEl.addEventListener('input', () => renderList(searchEl.value));
+    searchEl.focus();
+
+    function saveOverride(catId) {
+      fetch('/api/category-overrides').then(r => r.json()).then(overrides => {
+        if (catId) overrides[String(productId)] = catId;
+        else delete overrides[String(productId)];
+        return fetch('/api/category-overrides', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(overrides) });
+      }).then(() => {
+        overlay.remove();
+        loadProducts(productId, {
+          bluefly_category: catId || currentCat,
+          category_overridden: !!catId,
+        });
+      });
+    }
+
+    listEl.addEventListener('click', e => {
+      const item = e.target.closest('.cat-item');
+      if (item) saveOverride(item.dataset.id);
+    });
+    document.getElementById('cat-remove-btn').addEventListener('click', () => saveOverride(null));
+  });
 }
 
 async function pushProduct(productId, btn) {
@@ -1546,6 +2132,7 @@ function updatePubSelectedCount() {
   const checked = document.querySelectorAll('.pub-row-chk:checked').length;
   document.getElementById('pub-selected-count').textContent = checked;
   document.getElementById('reset-selected-btn').disabled = checked === 0;
+  document.getElementById('delete-selected-btn').disabled = checked === 0;
   const all = document.querySelectorAll('.pub-row-chk');
   const selectAll = document.getElementById('pub-select-all');
   if (selectAll) selectAll.indeterminate = checked > 0 && checked < all.length;
@@ -1584,6 +2171,82 @@ async function resetSelectedSync() {
     toast('Reset error: ' + e.message, 'error');
   }
   btn.innerHTML = `Reset Selected (<span id="pub-selected-count">0</span>)`;
+  btn.disabled = true;
+}
+
+async function deleteSelectedProducts() {
+  const checkboxes = [...document.querySelectorAll('.pub-row-chk:checked')];
+  if (!checkboxes.length) return;
+  const ids = checkboxes.map(c => parseInt(c.dataset.id));
+  // Collect all variant IDs for portal matching
+  const allVariantIds = [];
+  for (const id of ids) {
+    const p = _allPublishedProducts.find(x => x.id === id);
+    if (p && p.variant_ids) allVariantIds.push(...p.variant_ids);
+  }
+  if (!confirm(`Delete ${ids.length} product(s) from pipeline logs AND Puppet Vendors portal?\n\nThis will:\n1. Remove pipeline logs (reset sync status)\n2. Delete from the vendor portal\n\nThis cannot be undone.`)) return;
+
+  const btn = document.getElementById('delete-selected-btn');
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner"></span> Deleting…`;
+
+  try {
+    const res = await fetch(API_BASE + '/api/products/delete-selected', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({product_ids: ids, variant_ids: allVariantIds}),
+      cache: 'no-store',
+    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result = {};
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const msg = JSON.parse(line);
+        if (msg.type === 'reset') {
+          btn.innerHTML = `<span class="spinner"></span> Logs reset (${msg.count}), deleting from portal…`;
+        } else if (msg.type === 'deleting') {
+          btn.innerHTML = `<span class="spinner"></span> Deleting ${msg.portal_count} from portal…`;
+        } else if (msg.type === 'complete') {
+          result = msg;
+        } else if (msg.type === 'error') {
+          toast(msg.error, 'error');
+        }
+      }
+    }
+    // Process final buffer
+    if (buffer.trim()) {
+      const msg = JSON.parse(buffer);
+      if (msg.type === 'complete') result = msg;
+    }
+
+    const parts = [];
+    if (result.reset) parts.push(`${result.reset} log(s) reset`);
+    if (result.deleted) parts.push(`${result.deleted} deleted from portal`);
+    if (result.errors) parts.push(`${result.errors} portal error(s)`);
+    if (result.note) parts.push(result.note);
+    toast(parts.join(', ') || 'Done');
+
+    // Remove from published list
+    ids.forEach(productId => {
+      const pidx = _allPublishedProducts.findIndex(p => p.id === productId);
+      if (pidx >= 0) _allPublishedProducts.splice(pidx, 1);
+    });
+    _publishedProducts = _allPublishedProducts.slice();
+    _updatePublishedCounts();
+    renderPublishedPage(_pageState['published'] ? _pageState['published'].page : 1);
+    _unpublishedLoaded = false;
+  } catch (e) {
+    toast('Delete error: ' + e.message, 'error');
+  }
+  btn.innerHTML = 'Delete Selected';
   btn.disabled = true;
 }
 
@@ -1682,6 +2345,49 @@ async function bulkPush(force = false) {
   otherBtn.disabled = false;
   btn.innerHTML = force ? 'Re-push All' : 'Push All Unpushed';
   loadUnpublished(true); _publishedLoaded = false;
+}
+
+async function repushPublished() {
+  if (!confirm('Re-push all published products to Bluefly? This will update all catalog fields (including shopify_product_id for matching).')) return;
+  const btn = document.getElementById('pub-repush-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Re-pushing...';
+
+  let success = 0, errors = 0, total = 0;
+  try {
+    const res = await fetch(API_BASE + '/api/products/push-bulk', {
+      method: 'POST', cache: 'no-store',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({force: true}),
+    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'start') { total = msg.total; btn.innerHTML = `<span class="spinner"></span> 0 / ${total}`; }
+          else if (msg.type === 'success') { success++; btn.innerHTML = `<span class="spinner"></span> ${success + errors} / ${total}`; }
+          else if (msg.type === 'error') { errors++; }
+          else if (msg.type === 'complete') { toast(`Re-push complete: ${msg.success} pushed, ${msg.errors} errors`); }
+        } catch (e) {}
+      }
+    }
+  } catch (e) {
+    toast('Re-push error: ' + e.message, 'error');
+  }
+  btn.disabled = false;
+  btn.innerHTML = 'Re-push All';
+  loadPublished(true);
 }
 
 // -----------------------------------------------------------------------
@@ -1785,6 +2491,10 @@ async function loadSettings() {
     document.getElementById('elig-category').checked = elig.require_category !== false;
     document.getElementById('elig-quantity').checked = elig.require_quantity !== false;
     document.getElementById('elig-images').checked = elig.require_images !== false;
+    document.getElementById('elig-brand-product-id').checked = elig.require_brand_product_id !== false;
+
+    // Portal cookie
+    document.getElementById('portal-cookie').value = data.portal_cookie || '';
 
     updatePricePreview();
   } catch (e) {
@@ -1808,6 +2518,7 @@ async function saveEligibility() {
     require_category: document.getElementById('elig-category').checked,
     require_quantity: document.getElementById('elig-quantity').checked,
     require_images: document.getElementById('elig-images').checked,
+    require_brand_product_id: document.getElementById('elig-brand-product-id').checked,
   };
   try {
     const data = await apiPost('/api/settings', { eligibility });
@@ -1816,6 +2527,17 @@ async function saveEligibility() {
     } else {
       toast(data.error || 'Save failed', 'error');
     }
+  } catch (e) {
+    toast('Save error: ' + e.message, 'error');
+  }
+}
+
+async function savePortalCookie() {
+  const cookie = document.getElementById('portal-cookie').value.trim();
+  try {
+    const data = await apiPost('/api/settings', { portal_cookie: cookie });
+    if (data.success) toast('Portal cookie saved');
+    else toast(data.error || 'Save failed', 'error');
   } catch (e) {
     toast('Save error: ' + e.message, 'error');
   }
@@ -1964,6 +2686,242 @@ function renderCatalogTable() {
 }
 
 // -----------------------------------------------------------------------
+// Size Conversion Mappings
+// -----------------------------------------------------------------------
+let _sizeMappingsData = {};
+
+const _SIZE_MAPPING_LABELS = {
+  eu_to_sml:               { title: 'EU → S/M/L',              desc: 'EU dress sizes → Regular S/M/L for clothing (size_s_m_l)' },
+  womens_letter_to_numeric: { title: "Women's Letter → Numeric", desc: 'Letter sizes → Regular N (letter) for women\'s clothing' },
+  letter_to_mens_pants:    { title: "Letter → Men's Pants",     desc: 'Letter sizes → waist number for men\'s pants' },
+  eu_mens_pants_to_us:     { title: "EU → Men's Pants US",      desc: 'EU waist → US waist for men\'s pants' },
+  letter_to_waist:         { title: 'Letter → Waist',           desc: 'Letter sizes → waist inches for swim trunks etc.' },
+  eu_bra_band_to_us:       { title: 'EU Bra Band → US',         desc: 'EU band cm → US band inches for bras' },
+  us_chest_to_sml:         { title: 'US Chest → S/M/L',         desc: 'US chest inches → Regular S/M/L for men\'s clothing' },
+  eu_to_us_shoes:          { title: 'EU → US Shoes',            desc: 'EU shoe sizes → US shoe sizes' },
+};
+
+async function loadSizeConversions() {
+  hideError('sizes-error');
+  try {
+    loadSizeMappings();
+    loadBrandConversions();
+  } catch(e) {
+    showError('sizes-error', e.message);
+  }
+}
+
+async function loadSizeMappings() {
+  try {
+    _sizeMappingsData = await apiFetch('/api/size-mappings');
+    renderSizeMappings();
+  } catch(e) {
+    document.getElementById('size-mappings-container').innerHTML =
+      `<div class="error-banner">${esc(e.message)}</div>`;
+  }
+}
+
+function renderSizeMappings() {
+  const container = document.getElementById('size-mappings-container');
+  const keys = Object.keys(_SIZE_MAPPING_LABELS);
+  container.innerHTML = keys.map(key => {
+    const info = _SIZE_MAPPING_LABELS[key];
+    const entries = _sizeMappingsData[key] || {};
+    const sorted = Object.entries(entries).sort((a, b) => {
+      const na = parseFloat(a[0]), nb = parseFloat(b[0]);
+      if (!isNaN(na) && !isNaN(nb)) return na - nb;
+      return a[0].localeCompare(b[0]);
+    });
+    return `
+      <details class="size-map-card" style="margin-bottom:8px;border:1px solid var(--border);border-radius:6px;padding:0" ${sorted.length ? '' : 'open'}>
+        <summary style="padding:10px 14px;cursor:pointer;font-weight:600;font-size:14px;display:flex;justify-content:space-between;align-items:center">
+          <span>${esc(info.title)}</span>
+          <span style="font-weight:400;font-size:12px;color:var(--text-muted)">${sorted.length} entries</span>
+        </summary>
+        <div style="padding:0 14px 12px">
+          <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">${esc(info.desc)}</p>
+          <table class="data-table" style="font-size:13px">
+            <thead><tr><th style="width:40%">Input</th><th style="width:45%">Mapped To</th><th style="width:15%"></th></tr></thead>
+            <tbody id="smap-${key}">
+              ${sorted.map(([k, v]) => _sizeMapRow(key, k, v)).join('')}
+            </tbody>
+          </table>
+          <button class="btn btn-sm" style="margin-top:6px" onclick="addSizeMapRow('${key}')">+ Add Row</button>
+        </div>
+      </details>`;
+  }).join('');
+}
+
+function _sizeMapRow(tableKey, inputVal, mappedVal) {
+  return `<tr>
+    <td><input type="text" value="${esc(inputVal)}" data-table="${tableKey}" data-orig="${esc(inputVal)}" class="smap-input" style="width:100%;font-size:13px;padding:2px 6px"></td>
+    <td><input type="text" value="${esc(mappedVal)}" data-table="${tableKey}" class="smap-output" style="width:100%;font-size:13px;padding:2px 6px"></td>
+    <td style="text-align:center"><button class="btn btn-sm" style="color:var(--danger);padding:2px 8px" onclick="this.closest('tr').remove()">×</button></td>
+  </tr>`;
+}
+
+function addSizeMapRow(tableKey) {
+  const tbody = document.getElementById('smap-' + tableKey);
+  tbody.insertAdjacentHTML('beforeend', _sizeMapRow(tableKey, '', ''));
+  // Focus the new input
+  const inputs = tbody.querySelectorAll('tr:last-child input');
+  if (inputs.length) inputs[0].focus();
+}
+
+async function saveSizeMappings() {
+  const status = document.getElementById('size-mappings-status');
+  status.textContent = 'Saving…';
+  status.style.color = 'var(--text-muted)';
+
+  // Collect all tables from the DOM
+  const payload = {};
+  for (const key of Object.keys(_SIZE_MAPPING_LABELS)) {
+    const tbody = document.getElementById('smap-' + key);
+    if (!tbody) continue;
+    const map = {};
+    for (const row of tbody.querySelectorAll('tr')) {
+      const inp = row.querySelector('.smap-input');
+      const out = row.querySelector('.smap-output');
+      if (inp && out) {
+        const k = inp.value.trim();
+        const v = out.value.trim();
+        if (k && v) map[k] = v;
+      }
+    }
+    payload[key] = map;
+  }
+
+  try {
+    await apiFetch('/api/size-mappings', { method: 'PUT', body: JSON.stringify(payload) });
+    _sizeMappingsData = payload;
+    status.textContent = 'Saved!';
+    status.style.color = 'var(--success, green)';
+    setTimeout(() => { status.textContent = ''; }, 3000);
+  } catch(e) {
+    status.textContent = 'Error: ' + e.message;
+    status.style.color = 'var(--danger, red)';
+  }
+}
+
+// -----------------------------------------------------------------------
+// Brand Size Conversions
+// -----------------------------------------------------------------------
+let _brandConversionsData = {};
+
+async function loadBrandConversions() {
+  try {
+    _brandConversionsData = await apiFetch('/api/brand-size-conversions');
+    renderBrandConversions();
+  } catch(e) {
+    document.getElementById('brand-conversions-container').innerHTML =
+      `<div class="error-banner">${esc(e.message)}</div>`;
+  }
+}
+
+function renderBrandConversions() {
+  const container = document.getElementById('brand-conversions-container');
+  const labels = Object.keys(_brandConversionsData).sort();
+  if (!labels.length) {
+    container.innerHTML = '<div style="font-size:13px;color:var(--text-muted);padding:8px 0;">No brand conversion tables configured.</div>';
+    return;
+  }
+  container.innerHTML = labels.map(label => {
+    const entries = _brandConversionsData[label] || {};
+    const sorted = Object.entries(entries).sort((a, b) => {
+      const na = parseFloat(a[0]), nb = parseFloat(b[0]);
+      if (!isNaN(na) && !isNaN(nb)) return na - nb;
+      return a[0].localeCompare(b[0]);
+    });
+    const safeLabel = label.replace(/'/g, "\\'");
+    return `
+      <details class="brand-conv-card" data-label="${esc(label)}" style="margin-bottom:8px;border:1px solid var(--border);border-radius:6px;padding:0">
+        <summary style="padding:10px 14px;cursor:pointer;font-weight:600;font-size:14px;display:flex;justify-content:space-between;align-items:center">
+          <span>${esc(label)}</span>
+          <span style="font-weight:400;font-size:12px;color:var(--text-muted)">${sorted.length} entries
+            <button class="btn btn-sm" style="color:var(--danger);margin-left:8px;padding:1px 8px" onclick="event.stopPropagation();removeBrandTable('${safeLabel}')">Delete</button>
+          </span>
+        </summary>
+        <div style="padding:0 14px 12px">
+          <table class="data-table" style="font-size:13px">
+            <thead><tr><th style="width:40%">Source Size</th><th style="width:45%">Converted To</th><th style="width:15%"></th></tr></thead>
+            <tbody class="bconv-tbody">
+              ${sorted.map(([k, v]) => _brandConvRow(k, v)).join('')}
+            </tbody>
+          </table>
+          <button class="btn btn-sm" style="margin-top:6px" onclick="addBrandConvRow(this)">+ Add Row</button>
+        </div>
+      </details>`;
+  }).join('');
+}
+
+function _brandConvRow(inputVal, mappedVal) {
+  return `<tr>
+    <td><input type="text" value="${esc(String(inputVal))}" class="bconv-input" style="width:100%;font-size:13px;padding:2px 6px"></td>
+    <td><input type="text" value="${esc(String(mappedVal))}" class="bconv-output" style="width:100%;font-size:13px;padding:2px 6px"></td>
+    <td style="text-align:center"><button class="btn btn-sm" style="color:var(--danger);padding:2px 8px" onclick="this.closest('tr').remove()">×</button></td>
+  </tr>`;
+}
+
+function addBrandConvRow(btn) {
+  const tbody = btn.closest('div').querySelector('.bconv-tbody');
+  tbody.insertAdjacentHTML('beforeend', _brandConvRow('', ''));
+  const inputs = tbody.querySelectorAll('tr:last-child input');
+  if (inputs.length) inputs[0].focus();
+}
+
+function addBrandTable() {
+  const label = prompt('Enter ff_size_scale label (e.g. "Zegna Men Clothing Italy"):');
+  if (!label || !label.trim()) return;
+  _brandConversionsData[label.trim()] = {};
+  renderBrandConversions();
+  // Open the newly added card
+  const cards = document.querySelectorAll('.brand-conv-card');
+  for (const card of cards) {
+    if (card.dataset.label === label.trim()) { card.open = true; break; }
+  }
+}
+
+function removeBrandTable(label) {
+  if (!confirm('Remove brand table "' + label + '"?')) return;
+  delete _brandConversionsData[label];
+  renderBrandConversions();
+}
+
+async function saveBrandConversions() {
+  const status = document.getElementById('brand-conversions-status');
+  status.textContent = 'Saving…';
+  status.style.color = 'var(--text-muted)';
+
+  // Collect all brand tables from the DOM
+  const payload = {};
+  for (const card of document.querySelectorAll('.brand-conv-card')) {
+    const label = card.dataset.label;
+    const map = {};
+    for (const row of card.querySelectorAll('.bconv-tbody tr')) {
+      const inp = row.querySelector('.bconv-input');
+      const out = row.querySelector('.bconv-output');
+      if (inp && out) {
+        const k = inp.value.trim();
+        const v = out.value.trim();
+        if (k && v) map[k] = v;
+      }
+    }
+    payload[label] = map;
+  }
+
+  try {
+    await apiFetch('/api/brand-size-conversions', { method: 'PUT', body: JSON.stringify(payload) });
+    _brandConversionsData = payload;
+    status.textContent = 'Saved!';
+    status.style.color = 'var(--success, green)';
+    setTimeout(() => { status.textContent = ''; }, 3000);
+  } catch(e) {
+    status.textContent = 'Error: ' + e.message;
+    status.style.color = 'var(--danger, red)';
+  }
+}
+
+// -----------------------------------------------------------------------
 // Orders tab
 // -----------------------------------------------------------------------
 let _ordersData = [];
@@ -1980,17 +2938,30 @@ async function loadOrders() {
   tbody.innerHTML = loadingHTML(8);
   hideError('orders-error');
 
-  const statuses = ['ReleasedForShipment', 'Acknowledged', 'Shipped', 'Cancelled'];
+  const statuses = ['releasedforshipment', 'acknowledged', 'shipped', 'cancelled'];
   try {
-    const results = await Promise.all(
-      statuses.map(s => fetch(`/api/orders?status=${encodeURIComponent(s)}`).then(r => {
-        if (!r.ok) return { orders: [] };
-        return r.json();
-      }))
-    );
-    _ordersData = results.flatMap(r => r.orders || []);
+    const errors = [];
+    const allOrders = [];
+    for (const s of statuses) {
+      try {
+        const r = await fetch(`/api/orders?status=${encodeURIComponent(s)}`);
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          errors.push(s + ': ' + (body.error || r.statusText));
+        } else {
+          const data = await r.json();
+          allOrders.push(...(data.orders || []));
+        }
+      } catch (err) {
+        errors.push(s + ': ' + err.message);
+      }
+    }
+    _ordersData = allOrders;
     _ordersPage = 1;
     filterOrders();
+    if (errors.length > 0) {
+      showError('orders-error', 'Some order statuses failed: ' + errors.join('; '));
+    }
   } catch (e) {
     showError('orders-error', 'Failed to load orders: ' + e.message);
     tbody.innerHTML = emptyHTML(8, 'Error loading orders');
@@ -2001,7 +2972,7 @@ function filterOrders() {
   const q = (document.getElementById('order-search').value || '').toLowerCase();
   const statusFilter = document.getElementById('order-status-filter').value;
   _ordersFiltered = _ordersData.filter(o => {
-    if (statusFilter && o.OrderStatus !== statusFilter) return false;
+    if (statusFilter && (o.OrderStatus || '').toLowerCase() !== statusFilter) return false;
     if (!q) return true;
     const id = (o.ID || '').toLowerCase();
     const name = ((o.ShippingAddress || {}).FirstName || '') + ' ' + ((o.ShippingAddress || {}).LastName || '');
@@ -2033,7 +3004,7 @@ function renderOrdersPage(page) {
     const date = o.OrderDateUtc ? new Date(o.OrderDateUtc).toLocaleDateString() : '--';
     const total = o.TotalPrice != null ? '$' + Number(o.TotalPrice).toFixed(2) : '--';
     const shipping = esc(o.RequestedShippingMethod || '--');
-    const statusBadge = o.OrderStatus === 'ReleasedForShipment'
+    const statusBadge = (o.OrderStatus || '').toLowerCase() === 'releasedforshipment'
       ? '<span class="badge badge-warning">Released</span>'
       : `<span class="badge badge-gray">${esc(o.OrderStatus || '--')}</span>`;
 

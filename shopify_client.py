@@ -115,6 +115,18 @@ class ShopifyClient:
               value
               type
             }
+            ff_size_scale: metafield(namespace: "custom", key: "ff_size_scale") {
+              namespace
+              key
+              value
+              type
+            }
+            brand_product_id: metafield(namespace: "custom", key: "brand_product_id") {
+              namespace
+              key
+              value
+              type
+            }
             images(first: 10) {
               edges {
                 node {
@@ -231,6 +243,8 @@ class ShopifyClient:
               color: metafield(namespace: "custom", key: "color") { value }
               sub_category: metafield(namespace: "custom", key: "sub_category") { value }
               gender: metafield(namespace: "custom", key: "gender") { value }
+              brand_product_id: metafield(namespace: "custom", key: "brand_product_id") { value }
+              ff_size_scale: metafield(namespace: "custom", key: "ff_size_scale") { value }
               variants(first: 100) {
                 edges {
                   node {
@@ -268,12 +282,16 @@ class ShopifyClient:
                 sub_category = sub_cat_mf.get("value") if sub_cat_mf else None
                 gender_mf = node.get("gender")
                 gender = gender_mf.get("value") if gender_mf else None
+                bpid_mf = node.get("brand_product_id")
+                brand_product_id = bpid_mf.get("value") if bpid_mf else None
+                fss_mf = node.get("ff_size_scale")
+                ff_size_scale = fss_mf.get("value") if fss_mf else None
 
                 variant_edges = node.get("variants", {}).get("edges", [])
                 variants = [e["node"] for e in variant_edges]
                 total_qty = sum(v.get("inventoryQuantity", 0) for v in variants)
                 first_price = variants[0].get("price") if variants else None
-                first_sku = variants[0].get("sku", "") if variants else ""
+                first_sku = numeric_id
 
                 def _is_default_v(v):
                     if v.get("title", "").lower() == "default title":
@@ -294,6 +312,7 @@ class ShopifyClient:
 
                 img = node.get("featuredImage")
                 image_url = img.get("url") if img else None
+                variant_ids = [v.get("id", "").split("/")[-1] for v in variants if "/" in str(v.get("id", ""))]
 
                 all_products.append({
                     "id": numeric_id,
@@ -307,11 +326,14 @@ class ShopifyClient:
                     "color": color,
                     "sub_category": sub_category,
                     "gender": gender,
+                    "brand_product_id": brand_product_id,
+                    "ff_size_scale": ff_size_scale,
                     "first_sku": first_sku,
                     "first_price": first_price,
                     "variant_count": len(variants),
                     "total_quantity": total_qty,
                     "has_default_variants": has_default_variants,
+                    "variant_ids": variant_ids,
                 })
         return all_products
 
@@ -342,6 +364,8 @@ class ShopifyClient:
                 color: metafield(namespace: "custom", key: "color") { value }
                 sub_category: metafield(namespace: "custom", key: "sub_category") { value }
                 gender: metafield(namespace: "custom", key: "gender") { value }
+                brand_product_id: metafield(namespace: "custom", key: "brand_product_id") { value }
+                ff_size_scale: metafield(namespace: "custom", key: "ff_size_scale") { value }
                 variants(first: 100) {
                   edges {
                     node {
@@ -388,13 +412,17 @@ class ShopifyClient:
                 sub_category = sub_cat_mf.get("value") if sub_cat_mf else None
                 gender_mf = node.get("gender")
                 gender = gender_mf.get("value") if gender_mf else None
+                bpid_mf = node.get("brand_product_id")
+                brand_product_id = bpid_mf.get("value") if bpid_mf else None
+                fss_mf = node.get("ff_size_scale")
+                ff_size_scale = fss_mf.get("value") if fss_mf else None
 
                 # Flatten variants
                 variant_edges = node.get("variants", {}).get("edges", [])
                 variants = [e["node"] for e in variant_edges]
                 total_qty = sum(v.get("inventoryQuantity", 0) for v in variants)
                 first_price = variants[0].get("price") if variants else None
-                first_sku = variants[0].get("sku", "") if variants else ""
+                first_sku = numeric_id
 
                 # Detect default-only products (no real size/color options)
                 def _is_default_v(v):
@@ -417,6 +445,7 @@ class ShopifyClient:
                 # Featured image
                 img = node.get("featuredImage")
                 image_url = img.get("url") if img else None
+                variant_ids = [v.get("id", "").split("/")[-1] for v in variants if "/" in str(v.get("id", ""))]
 
                 all_products.append({
                     "id": numeric_id,
@@ -430,11 +459,14 @@ class ShopifyClient:
                     "color": color,
                     "sub_category": sub_category,
                     "gender": gender,
+                    "brand_product_id": brand_product_id,
+                    "ff_size_scale": ff_size_scale,
                     "first_sku": first_sku,
                     "first_price": first_price,
                     "variant_count": len(variants),
                     "total_quantity": total_qty,
                     "has_default_variants": has_default_variants,
+                    "variant_ids": variant_ids,
                 })
 
             page_info = data.get("pageInfo", {})
@@ -463,6 +495,8 @@ class ShopifyClient:
                 color: metafield(namespace: "custom", key: "color") { value }
                 sub_category: metafield(namespace: "custom", key: "sub_category") { value }
                 gender: metafield(namespace: "custom", key: "gender") { value }
+                brand_product_id: metafield(namespace: "custom", key: "brand_product_id") { value }
+                ff_size_scale: metafield(namespace: "custom", key: "ff_size_scale") { value }
                 variants(first: 100) {
                   edges {
                     node {
@@ -506,12 +540,16 @@ class ShopifyClient:
                 sub_category = sub_cat_mf.get("value") if sub_cat_mf else None
                 gender_mf = node.get("gender")
                 gender = gender_mf.get("value") if gender_mf else None
+                bpid_mf = node.get("brand_product_id")
+                brand_product_id = bpid_mf.get("value") if bpid_mf else None
+                fss_mf = node.get("ff_size_scale")
+                ff_size_scale = fss_mf.get("value") if fss_mf else None
 
                 variant_edges = node.get("variants", {}).get("edges", [])
                 variants = [e["node"] for e in variant_edges]
                 total_qty = sum(v.get("inventoryQuantity", 0) for v in variants)
                 first_price = variants[0].get("price") if variants else None
-                first_sku = variants[0].get("sku", "") if variants else ""
+                first_sku = numeric_id
 
                 def _is_default_v(v):
                     if v.get("title", "").lower() == "default title":
@@ -532,6 +570,7 @@ class ShopifyClient:
 
                 img = node.get("featuredImage")
                 image_url = img.get("url") if img else None
+                variant_ids = [v.get("id", "").split("/")[-1] for v in variants if "/" in str(v.get("id", ""))]
 
                 page_products.append({
                     "id": numeric_id,
@@ -545,11 +584,14 @@ class ShopifyClient:
                     "color": color,
                     "sub_category": sub_category,
                     "gender": gender,
+                    "brand_product_id": brand_product_id,
+                    "ff_size_scale": ff_size_scale,
                     "first_sku": first_sku,
                     "first_price": first_price,
                     "variant_count": len(variants),
                     "total_quantity": total_qty,
                     "has_default_variants": has_default_variants,
+                    "variant_ids": variant_ids,
                 })
 
             page_info = data.get("pageInfo", {})
@@ -572,6 +614,8 @@ class ShopifyClient:
         "care_instructions",
         "color",
         "size_notes",
+        "ff_size_scale",
+        "brand_product_id",
     ]
 
     @staticmethod

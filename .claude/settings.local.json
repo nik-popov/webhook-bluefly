@@ -19,7 +19,10 @@
       "Bash(python process_products.py:*)",
       "mcp__Claude_Preview__preview_start",
       "Bash(findstr:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(for f in pipeline_logs_errors/2026-03-10/*.json)",
+      "Bash(do cat \"$f\")",
+      "Bash(python3 -c \":*)"
     ]
   }
 }
