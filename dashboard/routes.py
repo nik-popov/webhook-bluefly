@@ -16,6 +16,10 @@ Provides:
   GET  /api/pipeline/jobs            List recent pipeline jobs
   GET  /api/field-mapping            Get field mapping definitions
   GET  /api/bluefly/field-catalog    Get full Bluefly field catalog (TSV-backed)
+  GET  /api/orders                  Fetch orders from Bluefly/Rithum
+  POST /api/orders/acknowledge      Acknowledge an order
+  POST /api/orders/fulfill          Submit fulfillment/tracking data
+  POST /api/orders/cancel           Cancel an unfillable order
 """
 
 import os
@@ -29,6 +33,7 @@ from flask import Blueprint, render_template, request, jsonify, Response, stream
 
 from field_mapper import (
     should_sync_product,
+    is_default_only_product,
     get_metafield,
     build_bluefly_payload,
     build_quantity_price_payload,
@@ -144,42 +149,37 @@ def index():
 
 
 # -----------------------------------------------------------------------
+# Image format validation
+# -----------------------------------------------------------------------
+
+_ALLOWED_IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.gif'}
+
+
+def _has_valid_image_format(image_url: str) -> bool:
+    """Check if an image URL has an allowed extension (jpg, jpeg, png, gif)."""
+    if not image_url:
+        return False
+    from urllib.parse import urlparse
+    path = urlparse(image_url).path.lower()
+    # Strip query params that Shopify sometimes adds
+    for ext in _ALLOWED_IMAGE_EXTS:
+        if path.endswith(ext):
+            return True
+    return False
+
+
+# -----------------------------------------------------------------------
 # Products API
 # -----------------------------------------------------------------------
 
-@dashboard_bp.route("/api/products")
-def api_products():
-    """List Bluefly-eligible products from Shopify with sync status."""
-    clients = _get_clients()
-    shopify = clients["shopify"]
-    if not shopify:
-        return jsonify({"error": "Shopify client not configured"}), 500
-
-    try:
-        all_products = shopify.list_products(query_filter="status:active")
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    cfg = load_config()
+def _enrich_products(products, synced_products, cfg):
+    """Add sync status, eligibility flags, and adjusted price to each product."""
     adj = cfg.get("price_adjustment_pct", 0)
     elig = cfg.get("eligibility", {})
-    require_category = elig.get("require_category", True)
     require_quantity = elig.get("require_quantity", True)
     require_images = elig.get("require_images", True)
 
-    # Load sync status first so already-pushed products are never excluded
-    pipeline_dir = clients["pipeline"].log_dir
-    synced_products = _get_synced_product_ids(pipeline_dir)
-
-    # Filter to eligible products — always include already-pushed products
-    eligible = []
-    for p in all_products:
-        already_pushed = synced_products.get(p["id"], {}).get("status") == "pushed"
-        if require_category and not p.get("bluefly_category") and not already_pushed:
-            continue
-        eligible.append(p)
-
-    for p in eligible:
+    for p in products:
         pid = p["id"]
         if pid in synced_products:
             p["sync_status"] = synced_products[pid]["status"]
@@ -188,32 +188,178 @@ def api_products():
             p["sync_status"] = "never"
             p["sync_time"] = None
 
-        # Mark eligibility flags for frontend display
+        if p["sync_status"] == "pushed" and p.get("has_default_variants"):
+            p["invalid"] = True
+            p["invalid_reason"] = "Published with Default Title/size variants — should be removed from Bluefly"
+        else:
+            p["invalid"] = False
+
         p["has_images"] = bool(p.get("image_url"))
         p["has_quantity"] = (p.get("total_quantity", 0) or 0) > 0
+        p["valid_image_format"] = _has_valid_image_format(p.get("image_url", ""))
 
-        # Determine if this product meets full eligibility for push
         p["push_eligible"] = True
+        if not p.get("bluefly_category"):
+            p["push_eligible"] = False
+        if p.get("has_default_variants"):
+            p["push_eligible"] = False
         if require_quantity and not p["has_quantity"]:
             p["push_eligible"] = False
         if require_images and not p["has_images"]:
             p["push_eligible"] = False
+        if p["has_images"] and not p["valid_image_format"]:
+            p["push_eligible"] = False
+            p["ineligible_reason"] = "Image format not supported (must be jpg, png, or gif)"
 
-        # Add adjusted price for display
         try:
             raw = float(p.get("first_price") or 0)
             p["adjusted_price"] = round(raw * (1 + adj / 100), 2) if raw else None
         except (ValueError, TypeError):
             p["adjusted_price"] = None
 
+    return products
+
+
+def _fetch_and_enrich():
+    """Fetch all Shopify products, enrich, and return (products, cfg, synced)."""
+    clients = _get_clients()
+    shopify = clients["shopify"]
+    if not shopify:
+        return None, None, None, "Shopify client not configured"
+
+    try:
+        all_products = shopify.list_products(query_filter="status:active")
+    except Exception as e:
+        return None, None, None, str(e)
+
+    cfg = load_config()
+    pipeline_dir = clients["pipeline"].log_dir
+    synced_products = _get_synced_product_ids(pipeline_dir)
+    _enrich_products(all_products, synced_products, cfg)
+    return all_products, cfg, synced_products, None
+
+
+@dashboard_bp.route("/api/products")
+def api_products():
+    """List all products from Shopify with sync status."""
+    all_products, cfg, synced_products, err = _fetch_and_enrich()
+    if err:
+        return jsonify({"error": err}), 500
+
     import app as _app
     return jsonify({
-        "products": eligible,
-        "total": len(eligible),
-        "price_adjustment_pct": adj,
-        "eligibility": elig,
+        "products": all_products,
+        "total": len(all_products),
+        "price_adjustment_pct": cfg.get("price_adjustment_pct", 0),
+        "eligibility": cfg.get("eligibility", {}),
         "store": _app.SHOPIFY_STORE,
     })
+
+
+@dashboard_bp.route("/api/stats")
+def api_stats():
+    """Lightweight dashboard stats from pipeline logs only (no Shopify API calls)."""
+    clients = _get_clients()
+    pipeline_dir = clients["pipeline"].log_dir
+    synced_products = _get_synced_product_ids(pipeline_dir)
+
+    synced_count = sum(1 for info in synced_products.values()
+                       if info.get("status") == "pushed")
+    return jsonify({
+        "synced": synced_count,
+    })
+
+
+@dashboard_bp.route("/api/products/published")
+def api_products_published():
+    """Stream published products as NDJSON — fetches only pushed product IDs."""
+    clients = _get_clients()
+    shopify = clients["shopify"]
+    if not shopify:
+        return jsonify({"error": "Shopify client not configured"}), 500
+
+    cfg = load_config()
+    pipeline_dir = clients["pipeline"].log_dir
+    synced_products = _get_synced_product_ids(pipeline_dir)
+    pushed_ids = [pid for pid, info in synced_products.items()
+                  if info.get("status") == "pushed"]
+
+    import app as _app
+
+    # Use nodes query — one GraphQL call per 50 IDs, no pagination needed
+    print(f"[Published] Fetching {len(pushed_ids)} pushed products by ID")
+    products = shopify.get_products_by_ids(pushed_ids)
+    _enrich_products(products, synced_products, cfg)
+    print(f"[Published] Done — {len(products)} products returned")
+
+    return jsonify({
+        "products": products,
+        "total": len(products),
+        "price_adjustment_pct": cfg.get("price_adjustment_pct", 0),
+        "eligibility": cfg.get("eligibility", {}),
+        "store": _app.SHOPIFY_STORE,
+    })
+
+
+@dashboard_bp.route("/api/products/unpublished")
+def api_products_unpublished():
+    """Stream unpublished products as NDJSON, one batch per Shopify page."""
+    return _stream_products(filter_status="not_pushed")
+
+
+def _stream_products(filter_status=None):
+    """Stream enriched products as NDJSON batches.
+
+    Each line is a JSON object:
+      {"type":"meta", ...}      — first line with config
+      {"type":"batch", "products":[...], "done":false}
+      {"type":"batch", "products":[...], "done":true}  — last batch
+    """
+    clients = _get_clients()
+    shopify = clients["shopify"]
+    if not shopify:
+        return jsonify({"error": "Shopify client not configured"}), 500
+
+    cfg = load_config()
+    pipeline_dir = clients["pipeline"].log_dir
+    synced_products = _get_synced_product_ids(pipeline_dir)
+
+    import app as _app
+
+    def generate():
+        yield json.dumps({
+            "type": "meta",
+            "price_adjustment_pct": cfg.get("price_adjustment_pct", 0),
+            "eligibility": cfg.get("eligibility", {}),
+            "store": _app.SHOPIFY_STORE,
+        }) + "\n"
+
+        total_sent = 0
+        total_shopify = 0
+        for page_products, has_more in shopify.list_products_pages(query_filter="status:active"):
+            total_shopify += len(page_products)
+            _enrich_products(page_products, synced_products, cfg)
+
+            if filter_status == "pushed":
+                batch = [p for p in page_products if p["sync_status"] == "pushed"]
+            elif filter_status == "not_pushed":
+                batch = [p for p in page_products if p["sync_status"] != "pushed"]
+            else:
+                batch = page_products
+
+            total_sent += len(batch)
+            print(f"[Stream] filter={filter_status} page={total_shopify} batch={len(batch)} total_sent={total_sent} has_more={has_more}")
+
+            yield json.dumps({
+                "type": "batch",
+                "products": batch,
+                "done": not has_more,
+            }) + "\n"
+
+        print(f"[Stream] DONE filter={filter_status} total_shopify={total_shopify} total_sent={total_sent}")
+
+    return Response(stream_with_context(generate()),
+                    content_type="application/x-ndjson")
 
 
 def _get_synced_product_ids(pipeline_dir: str) -> dict:
@@ -225,7 +371,7 @@ def _get_synced_product_ids(pipeline_dir: str) -> dict:
     """
     result = {}
     pattern = os.path.join(pipeline_dir, "*", "*.json")
-    for fpath in sorted(glob.glob(pattern)):
+    for fpath in sorted(glob.glob(pattern), key=os.path.getmtime):
         try:
             with open(fpath, "r", encoding="utf-8") as f:
                 record = json.load(f)
@@ -275,6 +421,18 @@ def api_push_product():
         if not category_id:
             return jsonify({"error": "No bluefly_category metafield"}), 400
 
+        if is_default_only_product(enriched.get("variants", [])):
+            return jsonify({"error": "Product has no real variants (Default Title only)"}), 400
+
+        if not enriched.get("images"):
+            return jsonify({"error": "Product has no images"}), 400
+
+        # Validate image formats (must be jpg, png, or gif)
+        for img in enriched.get("images", []):
+            img_url = img.get("url", "") if isinstance(img, dict) else str(img)
+            if img_url and not _has_valid_image_format(img_url):
+                return jsonify({"error": f"Image format not supported (must be jpg, png, or gif): {img_url}"}), 400
+
         # SQL lookup (graceful fallback)
         sql_field_map = {}
         variants = enriched.get("variants", [])
@@ -314,13 +472,22 @@ def api_push_product():
             event_id=f"dash-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
         )
 
-        # Push
-        result = bluefly.push_products([bluefly_payload])
+        # Push — use PUT if already published (full overwrite), POST for first push
+        pipeline_dir = pipeline.log_dir
+        synced = _get_synced_product_ids(pipeline_dir)
+        already_published = synced.get(int(product_id), {}).get("status") == "pushed"
+        if already_published:
+            result = bluefly.update_products_full([bluefly_payload])
+            endpoint_label = "products-put"
+        else:
+            result = bluefly.push_products([bluefly_payload])
+            endpoint_label = "products-post"
 
         if result["success"]:
             pipeline.update_stage(job_path, "pushed", {
                 "response_status": result["status_code"],
-                "endpoint": "products",
+                "endpoint": endpoint_label,
+                "sku": bluefly_payload.get("SellerSKU", ""),
                 "source": "dashboard",
             })
             return jsonify({
@@ -339,7 +506,15 @@ def api_push_product():
 
 @dashboard_bp.route("/api/products/push-bulk", methods=["POST"])
 def api_push_bulk():
-    """Push all unpushed eligible products. Streams NDJSON progress."""
+    """Push all unpushed eligible products. Streams NDJSON progress.
+
+    Body params (JSON, all optional):
+      force (bool): If true, re-sync all eligible products regardless of previous push history.
+                    Use this to backfill after downtime when webhook events were missed.
+    """
+    body = request.get_json(silent=True) or {}
+    force = bool(body.get("force", False))
+
     def generate():
         clients = _get_clients()
         shopify = clients["shopify"]
@@ -366,9 +541,12 @@ def api_push_bulk():
         if elig.get("require_images", True):
             eligible = [p for p in eligible if p.get("image_url")]
 
-        # Check which are already synced
+        # Check which are already synced (skipped when force=True)
         synced = _get_synced_product_ids(pipeline.log_dir)
-        to_push = [p for p in eligible if p["id"] not in synced or synced[p["id"]]["status"] != "pushed"]
+        if force:
+            to_push = eligible
+        else:
+            to_push = [p for p in eligible if p["id"] not in synced or synced[p["id"]]["status"] != "pushed"]
 
         yield json.dumps({"type": "start", "total": len(to_push)}) + "\n"
 
@@ -390,6 +568,14 @@ def api_push_bulk():
                 category_id = get_metafield(metafields, "custom", "bluefly_category")
                 if not category_id:
                     yield json.dumps({"type": "skip", "product_id": pid, "reason": "no category"}) + "\n"
+                    continue
+
+                if is_default_only_product(enriched.get("variants", [])):
+                    yield json.dumps({"type": "skip", "product_id": pid, "reason": "default_title_only"}) + "\n"
+                    continue
+
+                if elig.get("require_images", True) and not enriched.get("images"):
+                    yield json.dumps({"type": "skip", "product_id": pid, "reason": "no images"}) + "\n"
                     continue
 
                 sql_field_map = {}
@@ -417,11 +603,19 @@ def api_push_bulk():
                     event_id=f"bulk-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
                 )
 
-                result = bluefly.push_products([payload])
+                already_published = synced.get(pid, {}).get("status") == "pushed"
+                if already_published:
+                    result = bluefly.update_products_full([payload])
+                    endpoint_label = "products-put"
+                else:
+                    result = bluefly.push_products([payload])
+                    endpoint_label = "products-post"
 
                 if result["success"]:
                     pipeline.update_stage(job_path, "pushed", {
                         "response_status": result["status_code"],
+                        "endpoint": endpoint_label,
+                        "sku": payload.get("SellerSKU", ""),
                         "source": "dashboard-bulk",
                     })
                     success_count += 1
@@ -456,6 +650,51 @@ def api_push_bulk():
         stream_with_context(generate()),
         mimetype="application/x-ndjson",
     )
+
+
+@dashboard_bp.route("/api/products/reset-sync", methods=["POST"])
+def api_reset_sync():
+    """Delete pipeline log entries for given product IDs so they appear as 'never synced'.
+
+    Body (JSON):
+      product_ids: list of product IDs to reset  — OR —
+      all: true    to clear every pipeline log entry
+    """
+    data = request.get_json(force=True) or {}
+    reset_all = bool(data.get("all", False))
+    product_ids = set(str(pid) for pid in (data.get("product_ids") or []))
+
+    if not reset_all and not product_ids:
+        return jsonify({"error": "product_ids or all required"}), 400
+
+    clients = _get_clients()
+    pipeline_dir = clients["pipeline"].log_dir
+    pattern = os.path.join(pipeline_dir, "*", "*.json")
+
+    deleted = 0
+    for fpath in glob.glob(pattern):
+        try:
+            if reset_all:
+                os.remove(fpath)
+                deleted += 1
+            else:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    record = json.load(f)
+                pid = str(record.get("product_id", ""))
+                # Also check enriched-stage product_id (inventory jobs)
+                for stage in record.get("stages", []):
+                    if stage.get("stage") == "enriched":
+                        ep = str((stage.get("data") or {}).get("product_id", ""))
+                        if ep:
+                            pid = ep
+                        break
+                if pid in product_ids:
+                    os.remove(fpath)
+                    deleted += 1
+        except (OSError, json.JSONDecodeError):
+            continue
+
+    return jsonify({"reset": deleted})
 
 
 @dashboard_bp.route("/api/products/set-status", methods=["POST"])
@@ -706,6 +945,7 @@ def api_bluefly_catalog():
                 # Collect listing statuses and variant-level fields
                 listing_statuses = set()
                 variant_skus = []
+                shopify_skus = []
                 for b in buyables:
                     if not isinstance(b, dict):
                         continue
@@ -714,8 +954,10 @@ def api_bluefly_catalog():
                     # Check variant-level Fields too
                     for f in b.get("Fields", []):
                         if isinstance(f, dict) and f.get("Name") and f.get("Value"):
+                            if f["Name"] == "shopify_sku":
+                                shopify_skus.append(f["Value"])
                             # Only add to product-level if not already there
-                            if f["Name"] not in fields_dict:
+                            elif f["Name"] not in fields_dict:
                                 fields_dict[f["Name"]] = f["Value"]
 
                 # Determine overall listing status
@@ -746,6 +988,7 @@ def api_bluefly_catalog():
                     "category": fields_dict.get("category", ""),
                     "buyable_count": len(buyables),
                     "variant_skus": variant_skus,
+                    "shopify_skus": shopify_skus,
                     "total_quantity": total_qty,
                     "listing_status": listing_status,
                     "catalog_price": catalog_price,
@@ -763,6 +1006,78 @@ def api_bluefly_catalog():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@dashboard_bp.route("/api/bluefly/catalog/delist-all", methods=["POST"])
+def api_catalog_delist_all():
+    """Set every product in the Bluefly catalog to ListingStatus=NotLive. Streams NDJSON."""
+    clients = _get_clients()
+    bluefly = clients["bluefly"]
+    if not bluefly:
+        return jsonify({"error": "Bluefly client not configured"}), 500
+
+    def generate():
+        # Fetch current catalog
+        try:
+            result = bluefly.get_catalog()
+        except Exception as e:
+            yield json.dumps({"type": "error", "error": str(e)}) + "\n"
+            return
+
+        if not result["success"]:
+            yield json.dumps({"type": "error", "error": result.get("error", "Catalog fetch failed")}) + "\n"
+            return
+
+        catalog_data = result["data"]
+        products = []
+        if isinstance(catalog_data, list):
+            products = catalog_data
+        elif isinstance(catalog_data, dict):
+            products = (
+                catalog_data.get("Products") or catalog_data.get("products")
+                or catalog_data.get("Items") or catalog_data.get("items")
+                or catalog_data.get("Results") or catalog_data.get("results")
+                or ([catalog_data] if catalog_data.get("SellerSKU") else [])
+            )
+            if not isinstance(products, list):
+                products = [catalog_data]
+
+        yield json.dumps({"type": "start", "total": len(products)}) + "\n"
+
+        success_count = 0
+        error_count = 0
+        for i, p in enumerate(products):
+            if not isinstance(p, dict) or not p.get("SellerSKU"):
+                continue
+            buyables = p.get("BuyableProducts", [])
+            payload = {
+                "SellerSKU": p["SellerSKU"],
+                "Fields": [],
+                "BuyableProducts": [
+                    {
+                        "SellerSKU": b["SellerSKU"],
+                        "Fields": [],
+                        "Quantity": 0,
+                        "ListingStatus": "NotLive",
+                    }
+                    for b in buyables if isinstance(b, dict) and b.get("SellerSKU")
+                ],
+            }
+            try:
+                res = bluefly.update_quantity_price([payload])
+                if res["success"]:
+                    success_count += 1
+                    yield json.dumps({"type": "success", "index": i + 1, "total": len(products), "sku": p["SellerSKU"]}) + "\n"
+                else:
+                    error_count += 1
+                    yield json.dumps({"type": "error", "sku": p["SellerSKU"], "error": res.get("error", "")}) + "\n"
+            except Exception as e:
+                error_count += 1
+                yield json.dumps({"type": "error", "sku": p["SellerSKU"], "error": str(e)}) + "\n"
+
+        yield json.dumps({"type": "complete", "success": success_count, "errors": error_count}) + "\n"
+
+    return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
 
 
 # -----------------------------------------------------------------------
@@ -986,6 +1301,125 @@ def api_update_settings():
 MAPPING_URL = "http://3.150.206.227/bluefly/conversion"
 
 
+# -----------------------------------------------------------------------
+# Orders API
+# -----------------------------------------------------------------------
+
+@dashboard_bp.route("/api/orders")
+def api_orders():
+    """Fetch orders from Bluefly/Rithum."""
+    clients = _get_clients()
+    bf = clients["bluefly"]
+    if not bf:
+        return jsonify({"error": "Bluefly client not configured"}), 500
+
+    status = request.args.get("status", "ReleasedForShipment")
+    try:
+        result = bf.get_orders(status=status)
+        if not result["success"]:
+            return jsonify({"error": result["error"]}), 502
+
+        orders = result["data"]
+
+        # Handle double-encoded responses: list of JSON strings
+        if isinstance(orders, list) and len(orders) == 1 and isinstance(orders[0], str):
+            try:
+                parsed = json.loads(orders[0])
+                if isinstance(parsed, dict) and "ResponseBody" in parsed:
+                    orders = parsed["ResponseBody"]
+                elif isinstance(parsed, list):
+                    orders = parsed
+                else:
+                    orders = [parsed]
+            except (json.JSONDecodeError, TypeError):
+                pass
+        elif isinstance(orders, str):
+            try:
+                orders = json.loads(orders)
+            except (json.JSONDecodeError, TypeError):
+                orders = []
+
+        if not isinstance(orders, list):
+            orders = []
+
+        return jsonify({"orders": orders})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@dashboard_bp.route("/api/orders/acknowledge", methods=["POST"])
+def api_orders_acknowledge():
+    """Acknowledge receipt of an order."""
+    clients = _get_clients()
+    bf = clients["bluefly"]
+    if not bf:
+        return jsonify({"error": "Bluefly client not configured"}), 500
+
+    data = request.get_json(force=True)
+    order_id = data.get("order_id")
+    if not order_id:
+        return jsonify({"error": "order_id is required"}), 400
+
+    try:
+        result = bf.acknowledge_order(order_id)
+        if result["success"]:
+            return jsonify({"ok": True, "order_id": order_id})
+        return jsonify({"error": result["error"]}), 502
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@dashboard_bp.route("/api/orders/fulfill", methods=["POST"])
+def api_orders_fulfill():
+    """Submit fulfillment/tracking data for an order."""
+    clients = _get_clients()
+    bf = clients["bluefly"]
+    if not bf:
+        return jsonify({"error": "Bluefly client not configured"}), 500
+
+    data = request.get_json(force=True)
+    order_id = data.get("order_id")
+    items = data.get("items", [])
+    if not order_id or not items:
+        return jsonify({"error": "order_id and items are required"}), 400
+
+    fulfillment = {
+        "ID": order_id,
+        "Items": items,
+    }
+
+    try:
+        result = bf.fulfill_orders([fulfillment])
+        if result["success"]:
+            return jsonify({"ok": True, "order_id": order_id})
+        return jsonify({"error": result["error"]}), 502
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@dashboard_bp.route("/api/orders/cancel", methods=["POST"])
+def api_orders_cancel():
+    """Cancel an unfillable order."""
+    clients = _get_clients()
+    bf = clients["bluefly"]
+    if not bf:
+        return jsonify({"error": "Bluefly client not configured"}), 500
+
+    data = request.get_json(force=True)
+    order_id = data.get("order_id")
+    items = data.get("items", [])
+    if not order_id or not items:
+        return jsonify({"error": "order_id and items are required"}), 400
+
+    try:
+        result = bf.cancel_order(order_id, items)
+        if result["success"]:
+            return jsonify({"ok": True, "order_id": order_id})
+        return jsonify({"error": result["error"]}), 502
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @dashboard_bp.route("/proxy/mapping")
 def proxy_mapping():
     """Proxy the external Bluefly mapping tool page."""
@@ -1015,6 +1449,30 @@ def proxy_mapping():
             f"<p>Try directly: <a href='{MAPPING_URL}' target='_blank'>{MAPPING_URL}</a></p></body></html>",
             content_type="text/html",
         )
+
+
+@dashboard_bp.route("/api/logs/reset", methods=["POST"])
+def api_logs_reset():
+    """Delete all logs and pipeline_logs for a clean republish.
+
+    Body params (JSON, all optional — default true):
+      logs (bool):          Clear webhook event logs (logs/)
+      pipeline_logs (bool): Clear pipeline job logs (pipeline_logs/)
+    """
+    import shutil
+    import app as app_module
+    body = request.get_json(silent=True) or {}
+    cleared = []
+    dirs = {
+        "logs": app_module.LOG_DIR,
+        "pipeline_logs": app_module.PIPELINE_LOG_DIR,
+    }
+    for key, path in dirs.items():
+        if body.get(key, True) and os.path.isdir(path):
+            shutil.rmtree(path)
+            os.makedirs(path, exist_ok=True)
+            cleared.append(key)
+    return jsonify({"cleared": cleared})
 
 
 @dashboard_bp.route("/proxy/mapping/<path:subpath>")

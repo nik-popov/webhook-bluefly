@@ -89,6 +89,33 @@ def should_sync_product(product: dict) -> bool:
     return status == "ACTIVE"
 
 
+def _is_default_variant(variant: dict) -> bool:
+    """Return True if this variant has no real options (Shopify single-variant placeholder)."""
+    if variant.get("title", "").lower() == "default title":
+        return True
+    return any(
+        opt.get("value", "").lower() in ("default title", "default")
+        for opt in variant.get("selectedOptions", [])
+    )
+
+
+def _has_default_size(variants: list) -> bool:
+    """Return True if any variant has a Size option with a placeholder value."""
+    for v in variants:
+        for opt in v.get("selectedOptions", []):
+            if "size" in opt.get("name", "").lower() and opt.get("value", "").lower() in ("default", "default title", ""):
+                return True
+    return False
+
+
+def is_default_only_product(variants: list) -> bool:
+    """Return True if ALL variants are Shopify default placeholders, OR if any
+    variant has a Size option set to a placeholder value like 'Default'."""
+    if not variants:
+        return False
+    return all(_is_default_variant(v) for v in variants) or _has_default_size(variants)
+
+
 def _parse_tags_for_field(tags: list[str], keywords: list[str]) -> str | None:
     """Search tags for any keyword match. Returns first match or None."""
     for tag in tags:
@@ -114,8 +141,14 @@ def map_product_fields(product: dict, metafields: list) -> list[dict]:
     # brand — from vendor
     fields.append({"Name": "brand", "Value": product.get("vendor", "")})
 
-    # name — from title
-    fields.append({"Name": "name", "Value": product.get("title", "")})
+    # name — from title, with duplicate vendor prefix removed
+    raw_title = product.get("title", "")
+    vendor = product.get("vendor", "")
+    if vendor:
+        doubled = f"{vendor} {vendor}"
+        if raw_title.lower().startswith(doubled.lower()):
+            raw_title = raw_title[len(vendor):].lstrip()
+    fields.append({"Name": "name", "Value": raw_title})
 
     # description — from descriptionHtml (HTML allowed)
     fields.append(
@@ -170,6 +203,14 @@ def _extract_option(variant: dict, option_name: str) -> str:
     """Pull an option value from variant.selectedOptions by name."""
     for opt in variant.get("selectedOptions", []):
         if opt.get("name", "").lower() == option_name.lower():
+            return opt.get("value", "")
+    return ""
+
+
+def _extract_size_option(variant: dict) -> str:
+    """Pull a size value from any option whose name contains 'size' (e.g. 'Shoe size', 'US Size')."""
+    for opt in variant.get("selectedOptions", []):
+        if "size" in opt.get("name", "").lower():
             return opt.get("value", "")
     return ""
 
@@ -328,7 +369,7 @@ def map_variant_to_buyable(
     fields.append({"Name": "color_standard", "Value": _map_color_standard(color_display, default=color_std_default)})
 
     # Size — from selectedOptions
-    size_value = _extract_option(variant, "size")
+    size_value = _extract_size_option(variant)
     fields.append({"Name": "size", "Value": size_value or None})
 
     # Defaults — use config-driven values if provided
@@ -364,13 +405,16 @@ def map_variant_to_buyable(
         url = img.get("url")
         if url and url not in image_sources:
             image_sources.append(url)
-    for i in range(5):
-        img_name = f"image_{i + 1}"
-        img_url = image_sources[i] if i < len(image_sources) else None
-        fields.append({"Name": img_name, "Value": img_url})
+    for i, img_url in enumerate(image_sources[:5], 1):
+        fields.append({"Name": f"image_{i}", "Value": img_url})
 
     # Weight
     fields.append({"Name": "weight", "Value": _format_weight(variant.get("weight"))})
+
+    # Raw Shopify SKU — stored so the dashboard can match catalog entries back to Shopify products
+    raw_sku = (variant.get("sku") or "").strip()
+    if raw_sku:
+        fields.append({"Name": "shopify_sku", "Value": raw_sku})
 
     # SQL-looked-up fields (glasses_magnification, size fields, etc.)
     for field_name, bf_value in sql_fields.items():
@@ -502,8 +546,8 @@ def build_bluefly_payload(
         if f.get("Value") is not None
     ]
 
-    # Variants
-    variants = product.get("variants", [])
+    # Variants — strip Shopify default placeholder variants (no real options)
+    variants = [v for v in product.get("variants", []) if not _is_default_variant(v)]
     images = product.get("images", [])
     product_status = product.get("status", "ACTIVE")
 

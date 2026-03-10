@@ -234,9 +234,11 @@
 
 <div class="tabs">
   <button class="tab-btn active" data-tab="home">Dashboard</button>
-  <button class="tab-btn" data-tab="products">Products</button>
+  <button class="tab-btn" data-tab="published">Published</button>
+  <button class="tab-btn" data-tab="unpublished">Not Published</button>
   <button class="tab-btn" data-tab="events">Events</button>
   <button class="tab-btn" data-tab="mapping">Field Mapping</button>
+  <button class="tab-btn" data-tab="orders">Orders</button>
   <button class="tab-btn" data-tab="catalog">Catalog</button>
   <button class="tab-btn" data-tab="settings">Settings</button>
 </div>
@@ -279,73 +281,81 @@
 </div>
 
 <!-- ============ TAB: Products ============ -->
-<div id="tab-products" class="tab-content">
-  <div id="products-error" class="error-banner"></div>
+<div id="tab-published" class="tab-content">
+  <div id="published-error" class="error-banner"></div>
+  <h3 style="margin:0 0 12px;">Published to Bluefly&nbsp;<span class="count" id="published-count">0</span>
+    <span style="font-weight:400;font-size:12px;color:var(--text-muted);margin-left:6px;">·&nbsp;<span id="catalog-matched-count">0</span> live</span>
+  </h3>
+  <div class="toolbar" style="margin-bottom:12px;">
+    <input type="text" id="pub-search" placeholder="Search published…" style="min-width:240px;" oninput="filterPublished()">
+    <select id="pub-status-filter" onchange="filterPublished()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+      <option value="">All statuses</option>
+      <option value="pushed">Pushed</option>
+      <option value="error">Error</option>
+      <option value="skipped">Skipped</option>
+    </select>
+    <button class="btn btn-primary" onclick="loadPublished(true)">Refresh</button>
+    <button class="btn btn-outline" id="reset-selected-btn" onclick="resetSelectedSync()" disabled>Reset Selected (<span id="pub-selected-count">0</span>)</button>
+    <span id="pub-count-label" style="font-size:13px;color:var(--text-muted);"></span>
+  </div>
+  <div id="catalog-debug" style="display:none;margin-bottom:12px;">
+    <details>
+      <summary style="font-size:12px;color:var(--text-muted);cursor:pointer;">Catalog API raw response (debug — no products returned)</summary>
+      <pre id="catalog-debug-body" style="font-size:11px;background:#f3f4f6;padding:12px;border-radius:6px;margin-top:8px;overflow:auto;max-height:200px;white-space:pre-wrap;"></pre>
+    </details>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th><input type="checkbox" id="pub-select-all" onchange="togglePubSelectAll(this.checked)" title="Select all visible rows"></th>
+          <th></th><th>Title</th><th>Vendor</th><th>Category</th>
+          <th>Variants</th><th>Bluefly Price</th><th>Qty</th><th>Push Status</th><th>Live Status</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="published-tbody"></tbody>
+    </table>
+    <div class="pagination" id="published-pagination"></div>
+  </div>
+</div>
 
+<div id="tab-unpublished" class="tab-content">
+  <div id="unpublished-error" class="error-banner"></div>
+  <h3 style="margin:0 0 12px;">Not Published&nbsp;<span class="count" id="unpublished-count">0</span></h3>
   <div id="bulk-progress" style="display:none;">
     <div class="progress-bar"><div class="fill" id="bulk-fill" style="width:0%"></div></div>
     <div id="bulk-status" style="font-size:13px; color:var(--text-muted); margin-bottom:12px;"></div>
   </div>
   <div id="bulk-log" class="stream-log"></div>
-
-  <!-- Inner tabs: Published / Not Published -->
-  <div class="inner-tab-bar">
-    <button class="inner-tab-btn active" data-panel="published" onclick="switchProductTab('published')">
-      Published to Bluefly&nbsp;<span class="count" id="published-count">0</span>
-      <span style="font-weight:400;font-size:12px;color:var(--text-muted);margin-left:6px;">·&nbsp;<span id="catalog-matched-count">0</span> live</span>
-    </button>
-    <button class="inner-tab-btn" data-panel="unpublished" onclick="switchProductTab('unpublished')">
-      Not Published&nbsp;<span class="count" id="unpublished-count">0</span>
-    </button>
+  <div class="toolbar" style="margin-bottom:12px;">
+    <input type="text" id="unpub-search" placeholder="Search not published…" style="min-width:240px;" oninput="filterUnpublished()">
+    <select id="unpub-reason-filter" onchange="filterUnpublished()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+      <option value="">All products</option>
+      <option value="eligible">Eligible only</option>
+      <option value="no-category">No category</option>
+      <option value="default-variants">Default size only</option>
+      <option value="no-images">No images</option>
+      <option value="bad-image">Bad image format</option>
+      <option value="no-qty">Qty = 0</option>
+    </select>
+    <button class="btn btn-success" id="bulk-push-btn" onclick="bulkPush(false)">Push All Unpushed</button>
+    <button class="btn btn-warning" id="bulk-repush-btn" onclick="bulkPush(true)" title="Re-push every eligible product, including already-published ones">Re-push All</button>
+    <button class="btn btn-primary" onclick="loadUnpublished(true)">Refresh</button>
+    <button class="btn btn-success" id="push-selected-btn" onclick="pushSelected()" disabled>Push Selected (<span id="selected-count">0</span>)</button>
+    <span id="unpub-count-label" style="font-size:13px;color:var(--text-muted);"></span>
   </div>
-
-  <!-- Published panel -->
-  <div id="products-panel-published" class="inner-tab-panel">
-    <div class="toolbar" style="margin-bottom:12px;">
-      <input type="text" id="pub-search" placeholder="Search published…" style="min-width:240px;" oninput="filterPublished()">
-      <button class="btn btn-primary" onclick="loadProducts()">Refresh</button>
-      <span id="pub-count-label" style="font-size:13px;color:var(--text-muted);"></span>
-    </div>
-    <div id="catalog-debug" style="display:none;margin-bottom:12px;">
-      <details>
-        <summary style="font-size:12px;color:var(--text-muted);cursor:pointer;">Catalog API raw response (debug — no products returned)</summary>
-        <pre id="catalog-debug-body" style="font-size:11px;background:#f3f4f6;padding:12px;border-radius:6px;margin-top:8px;overflow:auto;max-height:200px;white-space:pre-wrap;"></pre>
-      </details>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th></th><th>Title</th><th>Vendor</th><th>Category</th>
-            <th>Variants</th><th>Bluefly Price</th><th>Qty</th><th>Push Status</th><th>Live Status</th><th>Actions</th>
-          </tr>
-        </thead>
-        <tbody id="published-tbody"></tbody>
-      </table>
-      <div class="pagination" id="published-pagination"></div>
-    </div>
-  </div>
-
-  <!-- Not Published panel -->
-  <div id="products-panel-unpublished" class="inner-tab-panel" style="display:none;">
-    <div class="toolbar" style="margin-bottom:12px;">
-      <input type="text" id="unpub-search" placeholder="Search not published…" style="min-width:240px;" oninput="filterUnpublished()">
-      <button class="btn btn-success" id="bulk-push-btn" onclick="bulkPush()">Push All Unpushed</button>
-      <button class="btn btn-primary" onclick="loadProducts()">Refresh</button>
-      <span id="unpub-count-label" style="font-size:13px;color:var(--text-muted);"></span>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th></th><th>Title</th><th>Vendor</th><th>Category</th>
-            <th>Variants</th><th>Bluefly Price</th><th>Qty</th><th>Eligible</th><th>Actions</th>
-          </tr>
-        </thead>
-        <tbody id="unpublished-tbody"></tbody>
-      </table>
-      <div class="pagination" id="unpublished-pagination"></div>
-    </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th><input type="checkbox" id="unpub-select-all" onchange="toggleSelectAll(this.checked)" title="Select all visible eligible rows"></th>
+          <th></th><th>Title</th><th>Vendor</th><th>Category</th>
+          <th>Variants</th><th>Bluefly Price</th><th>Qty</th><th>Eligible</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="unpublished-tbody"></tbody>
+    </table>
+    <div class="pagination" id="unpublished-pagination"></div>
   </div>
 </div>
 
@@ -572,35 +582,123 @@
   </div>
 </div>
 
+<!-- ============ TAB: Orders ============ -->
+<div id="tab-orders" class="tab-content">
+  <div id="orders-error" class="error-banner"></div>
+  <div class="toolbar">
+    <select id="order-status-filter" onchange="filterOrders()">
+      <option value="">All</option>
+      <option value="ReleasedForShipment">Released For Shipment</option>
+      <option value="Acknowledged">Acknowledged</option>
+      <option value="Shipped">Shipped</option>
+      <option value="Cancelled">Cancelled</option>
+    </select>
+    <input type="text" id="order-search" placeholder="Search orders..." oninput="filterOrders()" style="width:200px">
+    <button class="btn btn-outline btn-sm" onclick="loadOrders()">Refresh</button>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Order ID</th>
+          <th>Date</th>
+          <th>Status</th>
+          <th>Customer</th>
+          <th>Items</th>
+          <th>Total</th>
+          <th>Shipping</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="orders-body">
+        <tr><td colspan="8" style="text-align:center;color:var(--text-muted)">Click Refresh to load orders</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div id="orders-pagination" style="margin-top:12px"></div>
+</div>
+
+<!-- Fulfill Modal -->
+<div id="fulfill-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:8px;padding:24px;max-width:480px;width:90%;margin:auto;margin-top:15vh;">
+    <h3 style="margin-bottom:16px;">Fulfill Order <span id="fulfill-order-id"></span></h3>
+    <div id="fulfill-items-list" style="margin-bottom:12px;max-height:200px;overflow:auto;font-size:13px;"></div>
+    <div class="form-row" style="margin-bottom:8px;">
+      <label style="font-size:13px;">Tracking Number</label>
+      <input type="text" id="fulfill-tracking" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:4px;">
+    </div>
+    <div class="form-row" style="margin-bottom:8px;">
+      <label style="font-size:13px;">Shipping Carrier</label>
+      <input type="text" id="fulfill-carrier" value="US Postal Service" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:4px;">
+    </div>
+    <div class="form-row" style="margin-bottom:16px;">
+      <label style="font-size:13px;">Shipping Class</label>
+      <input type="text" id="fulfill-class" value="Ground Advantage" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:4px;">
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn btn-outline btn-sm" onclick="closeFulfillModal()">Cancel</button>
+      <button class="btn btn-success btn-sm" onclick="submitFulfill()">Submit Fulfillment</button>
+    </div>
+  </div>
+</div>
+
+<!-- Cancel Modal -->
+<div id="cancel-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:8px;padding:24px;max-width:480px;width:90%;margin:auto;margin-top:15vh;">
+    <h3 style="margin-bottom:16px;">Cancel Order <span id="cancel-order-id"></span></h3>
+    <div id="cancel-items-list" style="margin-bottom:12px;max-height:200px;overflow:auto;font-size:13px;"></div>
+    <div class="form-row" style="margin-bottom:16px;">
+      <label style="font-size:13px;">Reason</label>
+      <select id="cancel-reason" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:4px;">
+        <option value="ItemNotAvailable">Item Not Available</option>
+        <option value="BuyerCancellation">Buyer Cancellation</option>
+        <option value="GeneralAdjustment">General Adjustment</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn btn-outline btn-sm" onclick="closeCancelModal()">Cancel</button>
+      <button class="btn btn-danger btn-sm" onclick="submitCancel()">Confirm Cancellation</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============ TAB: Catalog ============ -->
 <div id="tab-catalog" class="tab-content">
   <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem">
     <h2 style="margin:0">Bluefly Catalog</h2>
-    <span id="catalog-match-summary" style="color:var(--text-muted);font-size:0.875rem"></span>
+    <span id="live-catalog-match-summary" style="color:var(--text-muted);font-size:0.875rem"></span>
   </div>
   <div class="toolbar" style="margin-bottom:12px;">
-    <input type="text" id="catalog-search" placeholder="Search catalog…" style="min-width:240px;" oninput="filterCatalog()">
-    <select id="catalog-status-filter" onchange="filterCatalog()">
+    <input type="text" id="live-catalog-search" placeholder="Search catalog…" style="min-width:240px;" oninput="filterLiveCatalog()">
+    <select id="live-catalog-status-filter" onchange="filterLiveCatalog()">
       <option value="">All Statuses</option>
       <option value="Live">Live</option>
       <option value="NotLive">Not Live</option>
     </select>
-    <select id="catalog-match-filter" onchange="filterCatalog()">
+    <select id="live-catalog-match-filter" onchange="filterLiveCatalog()">
       <option value="">All</option>
       <option value="matched">Matched</option>
       <option value="orphan">Orphan</option>
     </select>
-    <span id="catalog-count-label" style="font-size:13px;color:var(--text-muted);"></span>
+    <button class="btn btn-primary" onclick="loadCatalogTab(true)">Refresh</button>
+    <button class="btn btn-danger" id="delist-all-btn" onclick="delistAll()" title="Set every Bluefly catalog product to NotLive (delist from sale)">Delist All</button>
+    <span id="live-catalog-count-label" style="font-size:13px;color:var(--text-muted);"></span>
+  </div>
+  <div id="delist-progress" style="display:none;margin-bottom:12px;">
+    <div class="progress-bar"><div class="progress-fill" id="delist-fill"></div></div>
+    <div id="delist-status" style="font-size:13px;margin-top:4px;color:var(--text-muted);"></div>
+    <div id="delist-log" style="display:none;max-height:140px;overflow-y:auto;font-size:12px;font-family:monospace;background:#f3f4f6;border-radius:6px;padding:8px;margin-top:6px;"></div>
   </div>
   <div style="overflow-x:auto">
-    <table class="products-table" id="catalog-table">
+    <table class="products-table" id="live-catalog-table">
       <thead>
         <tr>
           <th>Name</th><th>Brand</th><th>SKU</th>
           <th>Variants</th><th>Qty</th><th>Listing Status</th><th>Shopify Match</th>
         </tr>
       </thead>
-      <tbody id="catalog-tbody"></tbody>
+      <tbody id="live-catalog-tbody"></tbody>
     </table>
   </div>
 </div>
@@ -645,15 +743,6 @@ async function apiPost(path, body) {
 }
 
 // -----------------------------------------------------------------------
-// Inner product sub-tabs
-// -----------------------------------------------------------------------
-function switchProductTab(name) {
-  document.querySelectorAll('.inner-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.panel === name));
-  document.getElementById('products-panel-published').style.display = name === 'published' ? '' : 'none';
-  document.getElementById('products-panel-unpublished').style.display = name === 'unpublished' ? '' : 'none';
-}
-
-// -----------------------------------------------------------------------
 // Tab switching
 // -----------------------------------------------------------------------
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -665,10 +754,12 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 
     const tab = btn.dataset.tab;
     if (tab === 'home') loadDashboard();
-    if (tab === 'products') loadProducts();
+    if (tab === 'published') loadPublished(false);
+    if (tab === 'unpublished') loadUnpublished(false);
     if (tab === 'events') loadEvents();
     if (tab === 'mapping') loadFieldMapping();
-    if (tab === 'catalog') loadCatalogTab();
+    if (tab === 'orders') loadOrders();
+    if (tab === 'catalog') loadCatalogTab(false);
     if (tab === 'settings') loadSettings();
   });
 });
@@ -750,11 +841,35 @@ function renderPagination(containerId, tableKey, total, page, totalPages, onPage
 // -----------------------------------------------------------------------
 // Dashboard / Home
 // -----------------------------------------------------------------------
-let _allProducts = [];
 let _priceAdj = 0;
 let _eligibility = {};
 let _catalogProducts = [];
 let _shopifySkuSet = new Set();
+let _publishedLoaded = false;
+let _publishedLoading = false;
+let _unpublishedLoaded = false;
+let _unpublishedLoading = false;
+let _catalogLoaded = false;
+let _catalogLoading = false;
+
+function _fetchCatalog() {
+  if (_catalogLoaded) return Promise.resolve({ products: _catalogProducts, total: _catalogProducts.length });
+  if (_catalogLoading) return new Promise(resolve => {
+    const interval = setInterval(() => {
+      if (_catalogLoaded) { clearInterval(interval); resolve({ products: _catalogProducts, total: _catalogProducts.length }); }
+    }, 200);
+  });
+  _catalogLoading = true;
+  return apiFetch('/api/bluefly/catalog').then(data => {
+    _catalogProducts = data.products || [];
+    _catalogLoaded = true;
+    _catalogLoading = false;
+    return data;
+  }).catch(e => {
+    _catalogLoading = false;
+    return { products: [], total: 0 };
+  });
+}
 
 async function loadDashboard() {
   hideError('home-error');
@@ -766,37 +881,44 @@ async function loadDashboard() {
   document.getElementById('stat-catalog').innerHTML = '<span class="spinner"></span>';
 
   try {
-    const [prodData, eventData, jobData, catalogData] = await Promise.all([
-      apiFetch('/api/products'),
+    // Lightweight calls only — no Shopify API hits from the dashboard
+    const [statsData, eventData, jobData, catalogData] = await Promise.all([
+      apiFetch('/api/stats'),
       apiFetch('/api/events?status=unread'),
       apiFetch('/api/pipeline/jobs'),
-      apiFetch('/api/bluefly/catalog').catch(() => ({products:[], total:0})),
+      _fetchCatalog(),
     ]);
 
-    const products = prodData.products || [];
     const unread = eventData.events || [];
     const jobs = jobData.jobs || [];
     const catalog = catalogData.products || [];
-
-    const synced = products.filter(p => p.sync_status === 'pushed').length;
     const errors = jobs.filter(j => j.status === 'error').length;
-
-    // Build SKU set from catalog for fast lookup
-    const catalogSkus = new Set();
-    for (const cp of catalog) {
-      if (cp.seller_sku) catalogSkus.add(cp.seller_sku);
-      for (const vsku of (cp.variant_skus || [])) {
-        if (vsku) catalogSkus.add(vsku);
-      }
-    }
-    const matched = products.filter(p => p.sync_status === 'pushed' && p.first_sku && catalogSkus.has(p.first_sku)).length;
 
     document.getElementById('stat-unread').textContent = unread.length;
     document.getElementById('stat-errors').textContent = errors;
-    document.getElementById('stat-eligible').textContent = products.length;
-    document.getElementById('stat-synced').textContent = synced;
-    document.getElementById('stat-matched').textContent = matched;
+    document.getElementById('stat-synced').textContent = statsData.synced || 0;
     document.getElementById('stat-catalog').textContent = catalog.length;
+
+    // Eligible and matched require Shopify data — show from cached tab data if available
+    if (_publishedLoaded && _allPublishedProducts.length) {
+      const catalogSkus = new Set();
+      for (const cp of catalog) {
+        if (cp.seller_sku) catalogSkus.add(cp.seller_sku);
+        for (const vsku of (cp.variant_skus || [])) if (vsku) catalogSkus.add(vsku);
+        for (const ssku of (cp.shopify_skus || [])) if (ssku) catalogSkus.add(ssku);
+      }
+      document.getElementById('stat-matched').textContent =
+        _allPublishedProducts.filter(p => p.first_sku && catalogSkus.has(p.first_sku)).length;
+    } else {
+      document.getElementById('stat-matched').textContent = '--';
+    }
+
+    if (_unpublishedLoaded && _allUnpublishedProducts.length) {
+      document.getElementById('stat-eligible').textContent =
+        _allUnpublishedProducts.filter(p => p.push_eligible).length;
+    } else {
+      document.getElementById('stat-eligible').textContent = '--';
+    }
   } catch (e) {
     showError('home-error', 'Failed to load dashboard: ' + e.message);
     document.getElementById('stat-unread').textContent = '--';
@@ -818,45 +940,142 @@ let _unpublishedProducts = [];
 let _catalogBySku = {};
 let _shopifyStore = '';
 
-async function loadProducts() {
-  hideError('products-error');
+async function _streamProducts(url, onMeta, onBatch) {
+  const res = await fetch(API_BASE + url, {cache: 'no-store'});
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`HTTP ${res.status}: ${text}`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, {stream: true});
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const msg = JSON.parse(line);
+      if (msg.type === 'meta') onMeta(msg);
+      else if (msg.type === 'batch') onBatch(msg);
+    }
+  }
+  if (buffer.trim()) {
+    const msg = JSON.parse(buffer);
+    if (msg.type === 'meta') onMeta(msg);
+    else if (msg.type === 'batch') onBatch(msg);
+  }
+}
+
+async function loadPublished(force = true) {
+  if (_publishedLoading) return;
+  if (!force && _publishedLoaded && _allPublishedProducts.length) {
+    _publishedProducts = _allPublishedProducts.slice();
+    _updatePublishedCounts();
+    renderPublishedPage(_pageState['published'] ? _pageState['published'].page : 1);
+    return;
+  }
+
+  _publishedLoading = true;
+  _publishedLoaded = false;
+  hideError('published-error');
   document.getElementById('published-tbody').innerHTML = loadingHTML(10);
-  document.getElementById('unpublished-tbody').innerHTML = loadingHTML(9);
-  document.getElementById('pub-search').value = '';
-  document.getElementById('unpub-search').value = '';
+  document.getElementById('pub-count-label').textContent = 'Loading…';
   _pageState['published'] = { page: 1 };
-  _pageState['unpublished'] = { page: 1 };
+  _allPublishedProducts = [];
 
   try {
-    const [data, catalogData] = await Promise.all([
-      apiFetch('/api/products'),
-      apiFetch('/api/bluefly/catalog').catch(() => ({products:[], total:0})),
-    ]);
+    const data = await apiFetch('/api/products/published');
     if (data.error) throw new Error(data.error);
 
-    _allProducts = data.products || [];
+    _allPublishedProducts = data.products || [];
     _priceAdj = data.price_adjustment_pct || 0;
     _eligibility = data.eligibility || {};
     _shopifyStore = data.store || '';
-    _catalogProducts = catalogData.products || [];
+    _shopifySkuSet = new Set(_allPublishedProducts.map(p => p.first_sku).filter(Boolean));
+    _publishedLoaded = true;
+    _publishedLoading = false;
 
-    // Build Shopify SKU set for catalog match status
-    _shopifySkuSet = new Set(_allProducts.map(p => p.first_sku).filter(Boolean));
+    _publishedProducts = _allPublishedProducts.slice();
+    _buildCatalogIndex();
+    _updatePublishedCounts();
+    renderPublishedPage(1);
 
-    // Show raw catalog response when empty (debug)
-    if (catalogData.total === 0 && catalogData.raw_body) {
-      document.getElementById('catalog-debug').style.display = '';
-      document.getElementById('catalog-debug-body').textContent = catalogData.raw_body;
-    } else {
-      document.getElementById('catalog-debug').style.display = 'none';
-    }
-
-    splitAndRender(_allProducts);
-    renderCatalogTable(_shopifySkuSet);
+    // Fetch catalog in background for live-status badges
+    _fetchCatalog().then(catalogData => {
+      _catalogProducts = catalogData.products || [];
+      if (catalogData.total === 0 && catalogData.raw_body) {
+        document.getElementById('catalog-debug').style.display = '';
+        document.getElementById('catalog-debug-body').textContent = catalogData.raw_body;
+      } else {
+        document.getElementById('catalog-debug').style.display = 'none';
+      }
+      _buildCatalogIndex();
+      _updatePublishedCounts();
+      renderPublishedPage(_pageState['published'] ? _pageState['published'].page : 1);
+      renderCatalogTable(_shopifySkuSet);
+    }).catch(() => {});
   } catch (e) {
-    showError('products-error', e.message);
+    _publishedLoading = false;
+    showError('published-error', e.message);
     document.getElementById('published-tbody').innerHTML = emptyHTML(10, 'Could not load products');
-    document.getElementById('unpublished-tbody').innerHTML = '';
+  }
+}
+
+async function loadUnpublished(force = true) {
+  if (_unpublishedLoading) return;
+  if (!force && _unpublishedLoaded && _allUnpublishedProducts.length) {
+    filterUnpublished();
+    return;
+  }
+
+  _unpublishedLoading = true;
+  _unpublishedLoaded = false;
+  hideError('unpublished-error');
+  document.getElementById('unpublished-tbody').innerHTML = loadingHTML(9);
+  document.getElementById('unpub-count-label').textContent = 'Loading…';
+  _pageState['unpublished'] = { page: 1 };
+  _allUnpublishedProducts = [];
+
+  try {
+    await _streamProducts('/api/products/unpublished',
+      (meta) => {
+        _priceAdj = meta.price_adjustment_pct || 0;
+        _eligibility = meta.eligibility || {};
+        _shopifyStore = meta.store || '';
+      },
+      (batch) => {
+        _allUnpublishedProducts = _allUnpublishedProducts.concat(batch.products || []);
+        // Re-apply filters but don't reset page during streaming
+        const q = document.getElementById('unpub-search').value.toLowerCase();
+        const reason = document.getElementById('unpub-reason-filter').value;
+        _unpublishedProducts = _allUnpublishedProducts.filter(p => {
+          if (q && !_matchesSearch(p, q)) return false;
+          if (reason === 'eligible' && !p.push_eligible) return false;
+          if (reason === 'no-category' && p.bluefly_category) return false;
+          if (reason === 'default-variants' && !p.has_default_variants) return false;
+          if (reason === 'no-images' && p.has_images) return false;
+          if (reason === 'bad-image' && !(p.has_images && !p.valid_image_format)) return false;
+          if (reason === 'no-qty' && p.has_quantity) return false;
+          return true;
+        });
+        _updateUnpublishedCounts();
+        if (!batch.done) {
+          document.getElementById('unpub-count-label').textContent =
+            _allUnpublishedProducts.length + ' products loaded so far…';
+        }
+        renderUnpublishedPage(1);
+      }
+    );
+
+    _unpublishedLoaded = true;
+    _unpublishedLoading = false;
+  } catch (e) {
+    _unpublishedLoading = false;
+    showError('unpublished-error', e.message);
+    document.getElementById('unpublished-tbody').innerHTML = emptyHTML(9, 'Could not load products');
   }
 }
 
@@ -869,7 +1088,13 @@ function _matchesSearch(p, q) {
 
 function filterPublished() {
   const q = document.getElementById('pub-search').value.toLowerCase();
-  _publishedProducts = q ? _allPublishedProducts.filter(p => _matchesSearch(p, q)) : _allPublishedProducts.slice();
+  const status = document.getElementById('pub-status-filter').value;
+  _publishedProducts = _allPublishedProducts.filter(p => {
+    if (q && !_matchesSearch(p, q)) return false;
+    if (status === 'error' && !p.invalid && p.sync_status !== 'error') return false;
+    if (status && status !== 'error' && p.sync_status !== status) return false;
+    return true;
+  });
   _pageState['published'] = { page: 1 };
   _updatePublishedCounts();
   renderPublishedPage(1);
@@ -877,7 +1102,17 @@ function filterPublished() {
 
 function filterUnpublished() {
   const q = document.getElementById('unpub-search').value.toLowerCase();
-  _unpublishedProducts = q ? _allUnpublishedProducts.filter(p => _matchesSearch(p, q)) : _allUnpublishedProducts.slice();
+  const reason = document.getElementById('unpub-reason-filter').value;
+  _unpublishedProducts = _allUnpublishedProducts.filter(p => {
+    if (q && !_matchesSearch(p, q)) return false;
+    if (reason === 'eligible' && !p.push_eligible) return false;
+    if (reason === 'no-category' && p.bluefly_category) return false;
+    if (reason === 'default-variants' && !p.has_default_variants) return false;
+    if (reason === 'no-images' && p.has_images) return false;
+    if (reason === 'bad-image' && !(p.has_images && !p.valid_image_format)) return false;
+    if (reason === 'no-qty' && p.has_quantity) return false;
+    return true;
+  });
   _pageState['unpublished'] = { page: 1 };
   _updateUnpublishedCounts();
   renderUnpublishedPage(1);
@@ -903,38 +1138,26 @@ function _updateUnpublishedCounts() {
   document.getElementById('unpub-count-label').textContent = showing + ' products';
 }
 
-function splitAndRender(products) {
-  // Build catalog lookup indexed by product-level AND variant-level SKUs
-  // so that p.first_sku (variant SKU) reliably hits the right catalog entry.
+function _buildCatalogIndex() {
   _catalogBySku = {};
   for (const cp of _catalogProducts) {
     if (cp.seller_sku) _catalogBySku[cp.seller_sku] = cp;
     for (const vsku of (cp.variant_skus || [])) {
       if (vsku) _catalogBySku[vsku] = cp;
     }
+    for (const ssku of (cp.shopify_skus || [])) {
+      if (ssku) _catalogBySku[ssku] = cp;
+    }
   }
-
-  // Trust the push log as the source of truth for Published status.
-  // The catalog is used for the live-status badge only (see renderProductTable).
-  _allPublishedProducts = products.filter(p => p.sync_status === 'pushed');
-  _allUnpublishedProducts = products.filter(p => !_allPublishedProducts.includes(p));
-  _publishedProducts = _allPublishedProducts.slice();
-  _unpublishedProducts = _allUnpublishedProducts.slice();
-
-  _updatePublishedCounts();
-  _updateUnpublishedCounts();
-
-  renderPublishedPage(_pageState['published'] ? _pageState['published'].page : 1);
-  renderUnpublishedPage(_pageState['unpublished'] ? _pageState['unpublished'].page : 1);
 }
 
-function renderCatalogTable(shopifySkuSet) {
-  const tbody = document.getElementById('catalog-tbody');
+function renderLiveCatalogTable(shopifySkuSet) {
+  const tbody = document.getElementById('live-catalog-tbody');
   if (!tbody) return;
 
-  const statusFilter = document.getElementById('catalog-status-filter') ? document.getElementById('catalog-status-filter').value : '';
-  const matchFilter = document.getElementById('catalog-match-filter') ? document.getElementById('catalog-match-filter').value : '';
-  const searchQuery = document.getElementById('catalog-search') ? document.getElementById('catalog-search').value.toLowerCase() : '';
+  const statusFilter = document.getElementById('live-catalog-status-filter') ? document.getElementById('live-catalog-status-filter').value : '';
+  const matchFilter = document.getElementById('live-catalog-match-filter') ? document.getElementById('live-catalog-match-filter').value : '';
+  const searchQuery = document.getElementById('live-catalog-search') ? document.getElementById('live-catalog-search').value.toLowerCase() : '';
 
   let matched = 0;
   let totalMatched = 0;
@@ -976,9 +1199,9 @@ function renderCatalogTable(shopifySkuSet) {
   tbody.innerHTML = rows.length
     ? rows.join('')
     : '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No catalog items</td></tr>';
-  const summary = document.getElementById('catalog-match-summary');
+  const summary = document.getElementById('live-catalog-match-summary');
   if (summary) summary.textContent = `${totalMatched} matched \u00b7 ${_catalogProducts.length - totalMatched} orphan`;
-  const countLabel = document.getElementById('catalog-count-label');
+  const countLabel = document.getElementById('live-catalog-count-label');
   if (countLabel) {
     const isFiltered = statusFilter || matchFilter || searchQuery;
     countLabel.textContent = isFiltered
@@ -987,25 +1210,82 @@ function renderCatalogTable(shopifySkuSet) {
   }
 }
 
-function filterCatalog() {
-  renderCatalogTable(_shopifySkuSet);
+function filterLiveCatalog() {
+  renderLiveCatalogTable(_shopifySkuSet);
 }
 
-async function loadCatalogTab() {
-  const tbody = document.getElementById('catalog-tbody');
+async function loadCatalogTab(force = false) {
+  if (force) { _catalogLoaded = false; _catalogLoading = false; }
+  if (!force && _catalogLoaded && _shopifySkuSet.size) { renderLiveCatalogTable(_shopifySkuSet); return; }
+  const tbody = document.getElementById('live-catalog-tbody');
   tbody.innerHTML = loadingHTML(7);
   try {
     const [prodData, catalogData] = await Promise.all([
       apiFetch('/api/products'),
-      apiFetch('/api/bluefly/catalog').catch(() => ({products:[], total:0})),
+      _fetchCatalog(),
     ]);
-    _allProducts = prodData.products || [];
+    const allProds = prodData.products || [];
     _catalogProducts = catalogData.products || [];
-    _shopifySkuSet = new Set(_allProducts.map(p => p.first_sku).filter(Boolean));
-    renderCatalogTable(_shopifySkuSet);
+    _shopifySkuSet = new Set(allProds.map(p => p.first_sku).filter(Boolean));
+    renderLiveCatalogTable(_shopifySkuSet);
   } catch (e) {
     tbody.innerHTML = emptyHTML(7, 'Could not load catalog: ' + e.message);
   }
+}
+
+async function delistAll() {
+  if (!confirm(`Delist ALL ${_catalogProducts.length} products from Bluefly? This sets every listing to NotLive.`)) return;
+  const btn = document.getElementById('delist-all-btn');
+  btn.disabled = true;
+  btn.textContent = 'Delisting…';
+  const progressEl = document.getElementById('delist-progress');
+  const fillEl = document.getElementById('delist-fill');
+  const statusEl = document.getElementById('delist-status');
+  const logEl = document.getElementById('delist-log');
+  progressEl.style.display = 'block';
+  logEl.style.display = 'block';
+  logEl.innerHTML = '';
+  fillEl.style.width = '0%';
+
+  try {
+    const res = await fetch(API_BASE + '/api/bluefly/catalog/delist-all', {method: 'POST', cache: 'no-store'});
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'start') {
+            statusEl.textContent = `Delisting 0 / ${msg.total}…`;
+          } else if (msg.type === 'success') {
+            const pct = Math.round((msg.index / msg.total) * 100);
+            fillEl.style.width = pct + '%';
+            statusEl.textContent = `Delisting ${msg.index} / ${msg.total}…`;
+            logEl.innerHTML += `<div style="color:#16a34a">OK ${esc(msg.sku)}</div>`;
+          } else if (msg.type === 'error') {
+            logEl.innerHTML += `<div style="color:#dc2626">ERR ${esc(msg.sku || '')}: ${esc(msg.error || '')}</div>`;
+          } else if (msg.type === 'complete') {
+            fillEl.style.width = '100%';
+            statusEl.textContent = `Complete: ${msg.success} delisted, ${msg.errors} errors`;
+            toast(`Delist complete: ${msg.success} delisted, ${msg.errors} errors`);
+            _catalogLoaded = false;
+          }
+          logEl.scrollTop = logEl.scrollHeight;
+        } catch (_) {}
+      }
+    }
+  } catch (e) {
+    toast('Delist error: ' + e.message, 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = 'Delist All';
 }
 
 function renderPublishedPage(page) {
@@ -1028,8 +1308,16 @@ function renderUnpublishedPage(page) {
 
 function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
   const tbody = document.getElementById(tbodyId);
+  if (isPublished) {
+    const sa = document.getElementById('pub-select-all');
+    if (sa) { sa.checked = false; sa.indeterminate = false; }
+    const countEl = document.getElementById('pub-selected-count');
+    if (countEl) countEl.textContent = '0';
+    const resetBtn = document.getElementById('reset-selected-btn');
+    if (resetBtn) resetBtn.disabled = true;
+  }
   if (!products.length) {
-    tbody.innerHTML = emptyHTML(isPublished ? 10 : 9, emptyMsg || 'No products');
+    tbody.innerHTML = emptyHTML(isPublished ? 11 : 9, emptyMsg || 'No products');
     return;
   }
   tbody.innerHTML = products.map(p => {
@@ -1038,7 +1326,8 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
       : '<div class="prod-img-placeholder">?</div>';
 
     let statusBadge;
-    if (p.sync_status === 'pushed') statusBadge = '<span class="badge badge-success">Pushed</span>';
+    if (p.invalid) statusBadge = '<span class="badge badge-error" title="' + (p.invalid_reason || '') + '">Error</span>';
+    else if (p.sync_status === 'pushed') statusBadge = '<span class="badge badge-success">Pushed</span>';
     else if (p.sync_status === 'error') statusBadge = '<span class="badge badge-error">Error</span>';
     else if (p.sync_status === 'skipped') statusBadge = '<span class="badge badge-warning">Skipped</span>';
     else statusBadge = '<span class="badge badge-gray">Never</span>';
@@ -1069,7 +1358,8 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
         ? `Qty mismatch: Shopify=${shopifyQty}, Bluefly=${catalogQty}. Click to sync.`
         : 'Sync qty+price to Bluefly';
       actions = `<button class="btn btn-primary btn-sm" onclick="pushProduct(${p.id}, this)" title="Re-push">Re-push</button>
-                 <button class="btn ${syncBtnClass} btn-sm" onclick="syncQtyPrice(${p.id}, this)" title="${syncTitle}">Sync</button>`;
+                 <button class="btn ${syncBtnClass} btn-sm" onclick="syncQtyPrice(${p.id}, this)" title="${syncTitle}">Sync</button>
+                 <button class="btn btn-outline btn-sm" onclick="resetSync(${p.id}, this)" title="Remove from Published (clears sync log)">Reset</button>`;
     } else {
       actions = `<button class="btn btn-primary btn-sm" onclick="pushProduct(${p.id}, this)" title="Push to Bluefly">Push</button>`;
     }
@@ -1085,8 +1375,11 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
     }
 
     const liveCol = isPublished ? `<td>${liveStatusCell}</td>` : '';
+    const chkCol = isPublished
+      ? `<td><input type="checkbox" class="pub-row-chk" data-id="${p.id}" onchange="updatePubSelectedCount()"></td>`
+      : '';
     return `<tr>
-      <td>${img}</td>
+      ${chkCol}<td>${img}</td>
       <td><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:inherit;"><strong>${esc(p.title)}</strong></a><br><span style="font-size:11px;color:var(--text-muted)">ID: ${p.id}</span></td>
       <td>${esc(p.vendor)}</td>
       <td>${esc(p.bluefly_category || '-')}</td>
@@ -1102,6 +1395,10 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
 
 function renderUnpublishedTable(tbodyId, products, emptyMsg) {
   const tbody = document.getElementById(tbodyId);
+  const selectAll = document.getElementById('unpub-select-all');
+  if (selectAll) { selectAll.checked = false; selectAll.indeterminate = false; }
+  document.getElementById('selected-count').textContent = '0';
+  document.getElementById('push-selected-btn').disabled = true;
   if (!products.length) {
     tbody.innerHTML = emptyHTML(9, emptyMsg || 'No products');
     return;
@@ -1123,7 +1420,10 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
 
     // Eligibility indicator
     const issues = [];
+    if (!p.bluefly_category) issues.push('No category');
+    if (p.has_default_variants) issues.push('Default size only');
     if (!p.has_images) issues.push('No images');
+    if (p.has_images && p.valid_image_format === false) issues.push('Bad image format');
     if (!p.has_quantity) issues.push('Qty = 0');
     const eligBadge = p.push_eligible
       ? '<span class="badge badge-success">Ready</span>'
@@ -1133,7 +1433,11 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
       ? `<button class="btn btn-primary btn-sm" onclick="pushProduct(${p.id}, this)">Push</button>`
       : `<button class="btn btn-outline btn-sm" disabled title="${esc(issues.join(', '))}">Ineligible</button>`;
 
+    const chk = p.push_eligible
+      ? `<input type="checkbox" class="unpub-row-chk" data-id="${p.id}" onchange="updateSelectedCount()">`
+      : `<input type="checkbox" disabled title="${esc(issues.join(', '))}">`;
     return `<tr>
+      <td>${chk}</td>
       <td>${img}</td>
       <td><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:inherit;"><strong>${esc(p.title)}</strong></a><br><span style="font-size:11px;color:var(--text-muted)">ID: ${p.id}</span></td>
       <td>${esc(p.vendor)}</td>
@@ -1147,6 +1451,50 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
   }).join('');
 }
 
+function updateSelectedCount() {
+  const checked = document.querySelectorAll('.unpub-row-chk:checked').length;
+  document.getElementById('selected-count').textContent = checked;
+  document.getElementById('push-selected-btn').disabled = checked === 0;
+  const all = document.querySelectorAll('.unpub-row-chk:not(:disabled)');
+  const selectAll = document.getElementById('unpub-select-all');
+  if (selectAll) selectAll.indeterminate = checked > 0 && checked < all.length;
+  if (selectAll) selectAll.checked = all.length > 0 && checked === all.length;
+}
+
+function toggleSelectAll(checked) {
+  document.querySelectorAll('.unpub-row-chk:not(:disabled)').forEach(c => c.checked = checked);
+  updateSelectedCount();
+}
+
+async function pushSelected() {
+  const checkboxes = [...document.querySelectorAll('.unpub-row-chk:checked')];
+  if (!checkboxes.length) return;
+  const ids = checkboxes.map(c => parseInt(c.dataset.id));
+  const btn = document.getElementById('push-selected-btn');
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner"></span> Pushing ${ids.length}…`;
+  let done = 0;
+  for (const productId of ids) {
+    try {
+      const data = await apiPost('/api/products/push', {product_id: productId});
+      if (data.success) {
+        const chk = document.querySelector(`.unpub-row-chk[data-id="${productId}"]`);
+        if (chk) chk.closest('tr').style.opacity = '0.4';
+        done++;
+      } else {
+        toast(`${productId}: ${data.error || 'failed'}`, 'error');
+      }
+    } catch (e) {
+      toast(`${productId}: ${e.message}`, 'error');
+    }
+    btn.innerHTML = `<span class="spinner"></span> Pushing ${done}/${ids.length}…`;
+  }
+  btn.innerHTML = `Push Selected (<span id="selected-count">0</span>)`;
+  btn.disabled = true;
+  toast(`Pushed ${done} of ${ids.length} products`);
+  loadUnpublished(true); _publishedLoaded = false;
+}
+
 async function pushProduct(productId, btn) {
   btn.disabled = true;
   const origText = btn.textContent;
@@ -1157,15 +1505,11 @@ async function pushProduct(productId, btn) {
       toast('Pushed: ' + data.product_title);
       const pidx = _allUnpublishedProducts.findIndex(p => p.id === productId);
       if (pidx >= 0) {
-        const moved = _allUnpublishedProducts.splice(pidx, 1)[0];
-        moved.sync_status = 'pushed';
-        _allPublishedProducts.unshift(moved);
-        _publishedProducts = _allPublishedProducts.slice();
+        _allUnpublishedProducts.splice(pidx, 1);
         _unpublishedProducts = _allUnpublishedProducts.slice();
-        _updatePublishedCounts();
         _updateUnpublishedCounts();
-        renderPublishedPage(_pageState['published'] ? _pageState['published'].page : 1);
         renderUnpublishedPage(_pageState['unpublished'] ? _pageState['unpublished'].page : 1);
+        _publishedLoaded = false; // invalidate so next visit reloads
       }
     } else {
       toast(data.error || 'Push failed', 'error');
@@ -1198,9 +1542,88 @@ async function syncQtyPrice(productId, btn) {
   }
 }
 
-async function bulkPush() {
-  const btn = document.getElementById('bulk-push-btn');
+function updatePubSelectedCount() {
+  const checked = document.querySelectorAll('.pub-row-chk:checked').length;
+  document.getElementById('pub-selected-count').textContent = checked;
+  document.getElementById('reset-selected-btn').disabled = checked === 0;
+  const all = document.querySelectorAll('.pub-row-chk');
+  const selectAll = document.getElementById('pub-select-all');
+  if (selectAll) selectAll.indeterminate = checked > 0 && checked < all.length;
+  if (selectAll) selectAll.checked = all.length > 0 && checked === all.length;
+}
+
+function togglePubSelectAll(checked) {
+  document.querySelectorAll('.pub-row-chk').forEach(c => c.checked = checked);
+  updatePubSelectedCount();
+}
+
+async function resetSelectedSync() {
+  const checkboxes = [...document.querySelectorAll('.pub-row-chk:checked')];
+  if (!checkboxes.length) return;
+  const ids = checkboxes.map(c => parseInt(c.dataset.id));
+  if (!confirm(`Remove ${ids.length} product(s) from Published? They will re-appear in Not Published.`)) return;
+  const btn = document.getElementById('reset-selected-btn');
   btn.disabled = true;
+  btn.innerHTML = `<span class="spinner"></span> Resetting…`;
+  try {
+    const data = await apiPost('/api/products/reset-sync', {product_ids: ids});
+    if (data.reset !== undefined) {
+      toast(`${data.reset} sync log(s) cleared`);
+      ids.forEach(productId => {
+        const pidx = _allPublishedProducts.findIndex(p => p.id === productId);
+        if (pidx >= 0) _allPublishedProducts.splice(pidx, 1);
+      });
+      _publishedProducts = _allPublishedProducts.slice();
+      _updatePublishedCounts();
+      renderPublishedPage(_pageState['published'] ? _pageState['published'].page : 1);
+      _unpublishedLoaded = false; // invalidate so next visit reloads
+    } else {
+      toast(data.error || 'Reset failed', 'error');
+    }
+  } catch (e) {
+    toast('Reset error: ' + e.message, 'error');
+  }
+  btn.innerHTML = `Reset Selected (<span id="pub-selected-count">0</span>)`;
+  btn.disabled = true;
+}
+
+async function resetSync(productId, btn) {
+  if (!confirm('Remove this product from Published? It will re-appear in Not Published so you can re-push it.')) return;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    const data = await apiPost('/api/products/reset-sync', {product_ids: [productId]});
+    if (data.reset !== undefined) {
+      toast('Sync log cleared — product moved to Not Published');
+      const pidx = _allPublishedProducts.findIndex(p => p.id === productId);
+      if (pidx >= 0) {
+        const moved = _allPublishedProducts.splice(pidx, 1)[0];
+        moved.sync_status = 'never';
+        _allUnpublishedProducts.unshift(moved);
+        _publishedProducts = _allPublishedProducts.slice();
+        _unpublishedProducts = _allUnpublishedProducts.slice();
+        _updatePublishedCounts();
+        _updateUnpublishedCounts();
+        renderPublishedPage(_pageState['published'] ? _pageState['published'].page : 1);
+        renderUnpublishedPage(_pageState['unpublished'] ? _pageState['unpublished'].page : 1);
+      }
+    } else {
+      toast(data.error || 'Reset failed', 'error');
+      btn.disabled = false;
+      btn.textContent = 'Reset';
+    }
+  } catch (e) {
+    toast('Reset error: ' + e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Reset';
+  }
+}
+
+async function bulkPush(force = false) {
+  const btn = document.getElementById(force ? 'bulk-repush-btn' : 'bulk-push-btn');
+  const otherBtn = document.getElementById(force ? 'bulk-push-btn' : 'bulk-repush-btn');
+  btn.disabled = true;
+  otherBtn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Pushing...';
   const progressEl = document.getElementById('bulk-progress');
   const fillEl = document.getElementById('bulk-fill');
@@ -1212,7 +1635,11 @@ async function bulkPush() {
   fillEl.style.width = '0%';
 
   try {
-    const res = await fetch(API_BASE + '/api/products/push-bulk', {method: 'POST', cache: 'no-store'});
+    const res = await fetch(API_BASE + '/api/products/push-bulk', {
+      method: 'POST', cache: 'no-store',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({force}),
+    });
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -1252,8 +1679,9 @@ async function bulkPush() {
     toast('Bulk push error: ' + e.message, 'error');
   }
   btn.disabled = false;
-  btn.innerHTML = 'Push All Unpushed';
-  loadProducts();
+  otherBtn.disabled = false;
+  btn.innerHTML = force ? 'Re-push All' : 'Push All Unpushed';
+  loadUnpublished(true); _publishedLoaded = false;
 }
 
 // -----------------------------------------------------------------------
@@ -1533,6 +1961,234 @@ function renderCatalogTable() {
       <td style="font-size:12px;color:var(--text-muted)">${esc(f.description)}</td>
     </tr>`;
   }).join('');
+}
+
+// -----------------------------------------------------------------------
+// Orders tab
+// -----------------------------------------------------------------------
+let _ordersData = [];
+let _ordersFiltered = [];
+const _ordersPerPage = 20;
+let _ordersPage = 1;
+
+// Currently active modal data
+let _fulfillOrder = null;
+let _cancelOrder = null;
+
+async function loadOrders() {
+  const tbody = document.getElementById('orders-body');
+  tbody.innerHTML = loadingHTML(8);
+  hideError('orders-error');
+
+  const statuses = ['ReleasedForShipment', 'Acknowledged', 'Shipped', 'Cancelled'];
+  try {
+    const results = await Promise.all(
+      statuses.map(s => fetch(`/api/orders?status=${encodeURIComponent(s)}`).then(r => {
+        if (!r.ok) return { orders: [] };
+        return r.json();
+      }))
+    );
+    _ordersData = results.flatMap(r => r.orders || []);
+    _ordersPage = 1;
+    filterOrders();
+  } catch (e) {
+    showError('orders-error', 'Failed to load orders: ' + e.message);
+    tbody.innerHTML = emptyHTML(8, 'Error loading orders');
+  }
+}
+
+function filterOrders() {
+  const q = (document.getElementById('order-search').value || '').toLowerCase();
+  const statusFilter = document.getElementById('order-status-filter').value;
+  _ordersFiltered = _ordersData.filter(o => {
+    if (statusFilter && o.OrderStatus !== statusFilter) return false;
+    if (!q) return true;
+    const id = (o.ID || '').toLowerCase();
+    const name = ((o.ShippingAddress || {}).FirstName || '') + ' ' + ((o.ShippingAddress || {}).LastName || '');
+    const skus = (o.Items || []).map(i => i.SellerSku || '').join(' ').toLowerCase();
+    return id.includes(q) || name.toLowerCase().includes(q) || skus.includes(q);
+  });
+  _ordersPage = 1;
+  renderOrdersPage(_ordersPage);
+}
+
+function renderOrdersPage(page) {
+  _ordersPage = page;
+  const tbody = document.getElementById('orders-body');
+  const start = (page - 1) * _ordersPerPage;
+  const pageItems = _ordersFiltered.slice(start, start + _ordersPerPage);
+
+  if (_ordersFiltered.length === 0) {
+    tbody.innerHTML = emptyHTML(8, 'No orders found');
+    document.getElementById('orders-pagination').innerHTML = '';
+    return;
+  }
+
+  tbody.innerHTML = pageItems.map(o => {
+    const addr = o.ShippingAddress || o.BuyerAddress || {};
+    const name = esc((addr.FirstName || '') + ' ' + (addr.LastName || ''));
+    const items = (o.Items || []).map(i =>
+      `<div style="font-size:12px">${esc(i.SellerSku)} x${i.Quantity}</div>`
+    ).join('');
+    const date = o.OrderDateUtc ? new Date(o.OrderDateUtc).toLocaleDateString() : '--';
+    const total = o.TotalPrice != null ? '$' + Number(o.TotalPrice).toFixed(2) : '--';
+    const shipping = esc(o.RequestedShippingMethod || '--');
+    const statusBadge = o.OrderStatus === 'ReleasedForShipment'
+      ? '<span class="badge badge-warning">Released</span>'
+      : `<span class="badge badge-gray">${esc(o.OrderStatus || '--')}</span>`;
+
+    return `<tr>
+      <td style="font-weight:500;font-size:13px">${esc(o.ID)}</td>
+      <td style="font-size:13px">${date}</td>
+      <td>${statusBadge}</td>
+      <td style="font-size:13px">${name}</td>
+      <td>${items}</td>
+      <td style="font-size:13px">${total}</td>
+      <td style="font-size:13px">${shipping}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline btn-sm" onclick="acknowledgeOrder('${esc(o.ID)}', this)">Ack</button>
+        <button class="btn btn-success btn-sm" onclick="openFulfillModal('${esc(o.ID)}')">Fulfill</button>
+        <button class="btn btn-danger btn-sm" onclick="openCancelModal('${esc(o.ID)}')">Cancel</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  // Pagination
+  const totalPages = Math.ceil(_ordersFiltered.length / _ordersPerPage);
+  renderOrdersPagination('orders-pagination', page, totalPages, 'renderOrdersPage');
+}
+
+function renderOrdersPagination(containerId, currentPage, totalPages, fnName) {
+  const el = document.getElementById(containerId);
+  if (totalPages <= 1) { el.innerHTML = ''; return; }
+  let html = '<div style="display:flex;gap:4px;align-items:center">';
+  html += `<button class="btn btn-outline btn-sm" ${currentPage <= 1 ? 'disabled' : ''} onclick="${fnName}(${currentPage - 1})">Prev</button>`;
+  for (let p = 1; p <= totalPages; p++) {
+    html += `<button class="btn btn-sm ${p === currentPage ? 'btn-primary' : 'btn-outline'}" onclick="${fnName}(${p})">${p}</button>`;
+  }
+  html += `<button class="btn btn-outline btn-sm" ${currentPage >= totalPages ? 'disabled' : ''} onclick="${fnName}(${currentPage + 1})">Next</button>`;
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+async function acknowledgeOrder(orderId, btn) {
+  btn.disabled = true;
+  btn.textContent = '...';
+  try {
+    const resp = await fetch('/api/orders/acknowledge', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({order_id: orderId})
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Failed');
+    toast('Order ' + orderId + ' acknowledged');
+    btn.textContent = 'Done';
+  } catch (e) {
+    toast('Acknowledge failed: ' + e.message, 'error');
+    btn.textContent = 'Ack';
+    btn.disabled = false;
+  }
+}
+
+function openFulfillModal(orderId) {
+  _fulfillOrder = _ordersData.find(o => o.ID === orderId);
+  if (!_fulfillOrder) return;
+  document.getElementById('fulfill-order-id').textContent = orderId;
+  const listEl = document.getElementById('fulfill-items-list');
+  listEl.innerHTML = (_fulfillOrder.Items || []).map(i =>
+    `<div style="padding:4px 0;border-bottom:1px solid var(--border)">
+      <strong>${esc(i.SellerSku)}</strong> &mdash; Qty: ${i.Quantity}
+      (Item ID: ${esc(i.ID)})
+    </div>`
+  ).join('');
+  document.getElementById('fulfill-tracking').value = '';
+  document.getElementById('fulfill-modal').style.display = 'flex';
+}
+
+function closeFulfillModal() {
+  document.getElementById('fulfill-modal').style.display = 'none';
+  _fulfillOrder = null;
+}
+
+async function submitFulfill() {
+  if (!_fulfillOrder) return;
+  const tracking = document.getElementById('fulfill-tracking').value.trim();
+  const carrier = document.getElementById('fulfill-carrier').value.trim();
+  const shippingClass = document.getElementById('fulfill-class').value.trim();
+  if (!tracking) { toast('Tracking number is required', 'error'); return; }
+
+  const now = new Date().toISOString();
+  const items = (_fulfillOrder.Items || []).map(i => ({
+    Quantity: i.Quantity,
+    SellerSku: i.SellerSku,
+    OrderItemID: i.ID,
+    ShippingClass: shippingClass,
+    ShippedDateUtc: now,
+    TrackingNumber: tracking,
+    ShippingCarrier: carrier,
+  }));
+
+  try {
+    const resp = await fetch('/api/orders/fulfill', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({order_id: _fulfillOrder.ID, items: items})
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Failed');
+    toast('Order ' + _fulfillOrder.ID + ' fulfilled');
+    closeFulfillModal();
+    loadOrders();
+  } catch (e) {
+    toast('Fulfill failed: ' + e.message, 'error');
+  }
+}
+
+function openCancelModal(orderId) {
+  _cancelOrder = _ordersData.find(o => o.ID === orderId);
+  if (!_cancelOrder) return;
+  document.getElementById('cancel-order-id').textContent = orderId;
+  const listEl = document.getElementById('cancel-items-list');
+  listEl.innerHTML = (_cancelOrder.Items || []).map(i =>
+    `<div style="padding:4px 0;border-bottom:1px solid var(--border)">
+      <strong>${esc(i.SellerSku)}</strong> &mdash; Qty: ${i.Quantity}
+      (Item ID: ${esc(i.ID)})
+    </div>`
+  ).join('');
+  document.getElementById('cancel-modal').style.display = 'flex';
+}
+
+function closeCancelModal() {
+  document.getElementById('cancel-modal').style.display = 'none';
+  _cancelOrder = null;
+}
+
+async function submitCancel() {
+  if (!_cancelOrder) return;
+  const reason = document.getElementById('cancel-reason').value;
+
+  const items = (_cancelOrder.Items || []).map(i => ({
+    ID: i.ID,
+    Reason: reason,
+    Quantity: i.Quantity,
+    SellerSku: i.SellerSku,
+  }));
+
+  try {
+    const resp = await fetch('/api/orders/cancel', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({order_id: _cancelOrder.ID, items: items})
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Failed');
+    toast('Order ' + _cancelOrder.ID + ' cancelled');
+    closeCancelModal();
+    loadOrders();
+  } catch (e) {
+    toast('Cancel failed: ' + e.message, 'error');
+  }
 }
 
 // -----------------------------------------------------------------------

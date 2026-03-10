@@ -19,6 +19,7 @@ from bluefly_client import BlueflyClient
 from sql_lookup import BlueflyDBLookup
 from field_mapper import (
     should_sync_product,
+    is_default_only_product,
     get_metafield,
     build_bluefly_payload,
     build_quantity_price_payload,
@@ -111,6 +112,29 @@ ALLOWED_TOPICS = {
 # Background pipeline processing
 # -----------------------------------------------------------------------
 
+def _is_published_to_bluefly(product_id) -> bool:
+    """Return True if this product has ever been successfully pushed to Bluefly."""
+    import glob as _glob
+    pattern = os.path.join(PIPELINE_LOG_DIR, "*", "*.json")
+    pid_str = str(product_id)
+    for fpath in _glob.glob(pattern):
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                rec = json.load(f)
+            pid = str(rec.get("product_id", ""))
+            for stage in rec.get("stages", []):
+                if stage.get("stage") == "enriched":
+                    ep = str((stage.get("data") or {}).get("product_id", ""))
+                    if ep:
+                        pid = ep
+                    break
+            if pid == pid_str and rec.get("status") == "pushed":
+                return True
+        except (OSError, json.JSONDecodeError):
+            continue
+    return False
+
+
 def _sync_product_to_bluefly(file_path: str, record: dict):
     """Background: enrich, map, and push a product event to Bluefly."""
     topic = record["topic"]
@@ -195,6 +219,21 @@ def _sync_product_to_bluefly(file_path: str, record: dict):
                 pipeline.update_stage(job_path, "skipped", {"reason": "no inventory"})
                 tx_logger.update_status(file_path, "processed")
                 return
+
+        if is_default_only_product(enriched.get("variants", [])):
+            print(f"[Pipeline] Default Title only -- skipping")
+            pipeline.update_stage(job_path, "skipped", {"reason": "default_title_only"})
+            tx_logger.update_status(file_path, "processed")
+            return
+
+        # Only update products already published to Bluefly via the dashboard.
+        # Prevents webhook events from auto-publishing products that were never
+        # manually pushed, or that were intentionally reset/removed.
+        if not _is_published_to_bluefly(product_id):
+            print(f"[Pipeline] Not yet published to Bluefly — skipping (push manually from dashboard)")
+            pipeline.update_stage(job_path, "skipped", {"reason": "not yet published — push manually"})
+            tx_logger.update_status(file_path, "processed")
+            return
 
         # Map (SQL lookup with graceful fallback)
         pipeline.update_stage(job_path, "mapping")
@@ -542,4 +581,5 @@ if __name__ == "__main__":
     if not WEBHOOK_SECRET:
         print("WARNING: SHOPIFY_WEBHOOK_SECRET is not set. HMAC verification will fail.")
     print(f"Starting webhook listener on port {PORT}...")
-    app.run(host="0.0.0.0", port=PORT)
+    from waitress import serve
+    serve(app, host="0.0.0.0", port=PORT, threads=8)

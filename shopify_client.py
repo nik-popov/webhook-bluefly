@@ -210,6 +210,111 @@ class ShopifyClient:
             "variant_sku": variant.get("sku", ""),
         }
 
+    def get_products_by_ids(self, product_ids: list) -> list[dict]:
+        """Fetch multiple products by numeric IDs using the GraphQL nodes query.
+
+        Returns the same simplified product dict format as list_products.
+        Uses batches of 50 IDs per GraphQL call (Shopify nodes limit).
+        """
+        query = """
+        query getNodes($ids: [ID!]!) {
+          nodes(ids: $ids) {
+            ... on Product {
+              id
+              title
+              vendor
+              productType
+              status
+              tags
+              featuredImage { url }
+              bluefly_category: metafield(namespace: "custom", key: "bluefly_category") { value }
+              color: metafield(namespace: "custom", key: "color") { value }
+              sub_category: metafield(namespace: "custom", key: "sub_category") { value }
+              gender: metafield(namespace: "custom", key: "gender") { value }
+              variants(first: 100) {
+                edges {
+                  node {
+                    sku
+                    title
+                    price
+                    compareAtPrice
+                    inventoryQuantity
+                    selectedOptions { name value }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+        all_products = []
+        BATCH = 50
+        for i in range(0, len(product_ids), BATCH):
+            chunk = product_ids[i:i + BATCH]
+            gids = [f"gid://shopify/Product/{pid}" for pid in chunk]
+            result = self.graphql(query, {"ids": gids})
+            nodes = result.get("data", {}).get("nodes", [])
+            for node in nodes:
+                if not node or not node.get("id"):
+                    continue
+                gid = node["id"]
+                numeric_id = int(gid.split("/")[-1]) if gid else None
+
+                category_mf = node.get("bluefly_category")
+                category = category_mf.get("value") if category_mf else None
+                color_mf = node.get("color")
+                color = color_mf.get("value") if color_mf else None
+                sub_cat_mf = node.get("sub_category")
+                sub_category = sub_cat_mf.get("value") if sub_cat_mf else None
+                gender_mf = node.get("gender")
+                gender = gender_mf.get("value") if gender_mf else None
+
+                variant_edges = node.get("variants", {}).get("edges", [])
+                variants = [e["node"] for e in variant_edges]
+                total_qty = sum(v.get("inventoryQuantity", 0) for v in variants)
+                first_price = variants[0].get("price") if variants else None
+                first_sku = variants[0].get("sku", "") if variants else ""
+
+                def _is_default_v(v):
+                    if v.get("title", "").lower() == "default title":
+                        return True
+                    return any(
+                        o.get("value", "").lower() in ("default title", "default")
+                        for o in v.get("selectedOptions", [])
+                    )
+                def _has_default_size_v(vs):
+                    for v in vs:
+                        for o in v.get("selectedOptions", []):
+                            if o.get("name", "").lower() == "size" and o.get("value", "").lower() in ("default", "default title", ""):
+                                return True
+                    return False
+                has_default_variants = bool(variants) and (
+                    all(_is_default_v(v) for v in variants) or _has_default_size_v(variants)
+                )
+
+                img = node.get("featuredImage")
+                image_url = img.get("url") if img else None
+
+                all_products.append({
+                    "id": numeric_id,
+                    "title": node.get("title", ""),
+                    "vendor": node.get("vendor", ""),
+                    "product_type": node.get("productType", ""),
+                    "status": node.get("status", ""),
+                    "tags": node.get("tags", []),
+                    "image_url": image_url,
+                    "bluefly_category": category,
+                    "color": color,
+                    "sub_category": sub_category,
+                    "gender": gender,
+                    "first_sku": first_sku,
+                    "first_price": first_price,
+                    "variant_count": len(variants),
+                    "total_quantity": total_qty,
+                    "has_default_variants": has_default_variants,
+                })
+        return all_products
+
     def list_products(self, query_filter: str = "status:active") -> list[dict]:
         """
         List products via cursor-based pagination through Shopify GraphQL.
@@ -223,7 +328,7 @@ class ShopifyClient:
         """
         query = """
         query listProducts($cursor: String, $query: String) {
-          products(first: 50, after: $cursor, query: $query) {
+          products(first: 50, after: $cursor, query: $query, sortKey: ID) {
             edges {
               node {
                 id
@@ -241,9 +346,11 @@ class ShopifyClient:
                   edges {
                     node {
                       sku
+                      title
                       price
                       compareAtPrice
                       inventoryQuantity
+                      selectedOptions { name value }
                     }
                   }
                 }
@@ -289,6 +396,24 @@ class ShopifyClient:
                 first_price = variants[0].get("price") if variants else None
                 first_sku = variants[0].get("sku", "") if variants else ""
 
+                # Detect default-only products (no real size/color options)
+                def _is_default_v(v):
+                    if v.get("title", "").lower() == "default title":
+                        return True
+                    return any(
+                        o.get("value", "").lower() in ("default title", "default")
+                        for o in v.get("selectedOptions", [])
+                    )
+                def _has_default_size_v(vs):
+                    for v in vs:
+                        for o in v.get("selectedOptions", []):
+                            if o.get("name", "").lower() == "size" and o.get("value", "").lower() in ("default", "default title", ""):
+                                return True
+                    return False
+                has_default_variants = bool(variants) and (
+                    all(_is_default_v(v) for v in variants) or _has_default_size_v(variants)
+                )
+
                 # Featured image
                 img = node.get("featuredImage")
                 image_url = img.get("url") if img else None
@@ -309,6 +434,7 @@ class ShopifyClient:
                     "first_price": first_price,
                     "variant_count": len(variants),
                     "total_quantity": total_qty,
+                    "has_default_variants": has_default_variants,
                 })
 
             page_info = data.get("pageInfo", {})
@@ -318,6 +444,122 @@ class ShopifyClient:
                 break
 
         return all_products
+
+    def list_products_pages(self, query_filter: str = "status:active"):
+        """Yield pages of products as they arrive from Shopify GraphQL pagination."""
+        query = """
+        query listProducts($cursor: String, $query: String) {
+          products(first: 50, after: $cursor, query: $query, sortKey: ID) {
+            edges {
+              node {
+                id
+                title
+                vendor
+                productType
+                status
+                tags
+                featuredImage { url }
+                bluefly_category: metafield(namespace: "custom", key: "bluefly_category") { value }
+                color: metafield(namespace: "custom", key: "color") { value }
+                sub_category: metafield(namespace: "custom", key: "sub_category") { value }
+                gender: metafield(namespace: "custom", key: "gender") { value }
+                variants(first: 100) {
+                  edges {
+                    node {
+                      sku
+                      title
+                      price
+                      compareAtPrice
+                      inventoryQuantity
+                      selectedOptions { name value }
+                    }
+                  }
+                }
+              }
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+        """
+        cursor = None
+
+        while True:
+            variables = {"query": query_filter}
+            if cursor:
+                variables["cursor"] = cursor
+
+            result = self.graphql(query, variables)
+            data = result.get("data", {}).get("products", {})
+            edges = data.get("edges", [])
+            page_products = []
+
+            for edge in edges:
+                node = edge["node"]
+                gid = node.get("id", "")
+                numeric_id = int(gid.split("/")[-1]) if gid else None
+
+                category_mf = node.get("bluefly_category")
+                category = category_mf.get("value") if category_mf else None
+                color_mf = node.get("color")
+                color = color_mf.get("value") if color_mf else None
+                sub_cat_mf = node.get("sub_category")
+                sub_category = sub_cat_mf.get("value") if sub_cat_mf else None
+                gender_mf = node.get("gender")
+                gender = gender_mf.get("value") if gender_mf else None
+
+                variant_edges = node.get("variants", {}).get("edges", [])
+                variants = [e["node"] for e in variant_edges]
+                total_qty = sum(v.get("inventoryQuantity", 0) for v in variants)
+                first_price = variants[0].get("price") if variants else None
+                first_sku = variants[0].get("sku", "") if variants else ""
+
+                def _is_default_v(v):
+                    if v.get("title", "").lower() == "default title":
+                        return True
+                    return any(
+                        o.get("value", "").lower() in ("default title", "default")
+                        for o in v.get("selectedOptions", [])
+                    )
+                def _has_default_size_v(vs):
+                    for v in vs:
+                        for o in v.get("selectedOptions", []):
+                            if o.get("name", "").lower() == "size" and o.get("value", "").lower() in ("default", "default title", ""):
+                                return True
+                    return False
+                has_default_variants = bool(variants) and (
+                    all(_is_default_v(v) for v in variants) or _has_default_size_v(variants)
+                )
+
+                img = node.get("featuredImage")
+                image_url = img.get("url") if img else None
+
+                page_products.append({
+                    "id": numeric_id,
+                    "title": node.get("title", ""),
+                    "vendor": node.get("vendor", ""),
+                    "product_type": node.get("productType", ""),
+                    "status": node.get("status", ""),
+                    "tags": node.get("tags", []),
+                    "image_url": image_url,
+                    "bluefly_category": category,
+                    "color": color,
+                    "sub_category": sub_category,
+                    "gender": gender,
+                    "first_sku": first_sku,
+                    "first_price": first_price,
+                    "variant_count": len(variants),
+                    "total_quantity": total_qty,
+                    "has_default_variants": has_default_variants,
+                })
+
+            page_info = data.get("pageInfo", {})
+            has_more = page_info.get("hasNextPage", False)
+            yield page_products, has_more
+
+            if has_more:
+                cursor = page_info.get("endCursor")
+            else:
+                break
 
     # Metafield aliases used in the GraphQL query for direct lookups.
     # These may not appear in metafields(first:20) if they lack a
