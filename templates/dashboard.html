@@ -347,8 +347,7 @@
       <option value="bad-image">Bad image format</option>
       <option value="no-qty">Qty = 0</option>
     </select>
-    <button class="btn btn-success" id="bulk-push-btn" onclick="bulkPush(false)">Push All Unpushed</button>
-    <button class="btn btn-warning" id="bulk-repush-btn" onclick="bulkPush(true)" title="Re-push every eligible product, including already-published ones">Re-push All</button>
+    <button class="btn btn-success" id="bulk-push-btn" onclick="bulkPush()">Push All Unpushed</button>
     <button class="btn btn-primary" onclick="loadUnpublished(true)">Refresh</button>
     <button class="btn btn-success" id="push-selected-btn" onclick="pushSelected()" disabled>Push Selected (<span id="selected-count">0</span>)</button>
     <span id="unpub-count-label" style="font-size:13px;color:var(--text-muted);"></span>
@@ -2282,11 +2281,9 @@ async function resetSync(productId, btn) {
   }
 }
 
-async function bulkPush(force = false) {
-  const btn = document.getElementById(force ? 'bulk-repush-btn' : 'bulk-push-btn');
-  const otherBtn = document.getElementById(force ? 'bulk-push-btn' : 'bulk-repush-btn');
+async function bulkPush() {
+  const btn = document.getElementById('bulk-push-btn');
   btn.disabled = true;
-  otherBtn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Pushing...';
   const progressEl = document.getElementById('bulk-progress');
   const fillEl = document.getElementById('bulk-fill');
@@ -2301,7 +2298,7 @@ async function bulkPush(force = false) {
     const res = await fetch(API_BASE + '/api/products/push-bulk', {
       method: 'POST', cache: 'no-store',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({force}),
+      body: JSON.stringify({}),
     });
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -2342,52 +2339,8 @@ async function bulkPush(force = false) {
     toast('Bulk push error: ' + e.message, 'error');
   }
   btn.disabled = false;
-  otherBtn.disabled = false;
-  btn.innerHTML = force ? 'Re-push All' : 'Push All Unpushed';
+  btn.innerHTML = 'Push All Unpushed';
   loadUnpublished(true); _publishedLoaded = false;
-}
-
-async function repushPublished() {
-  if (!confirm('Re-push all published products to Bluefly? This will update all catalog fields (including shopify_product_id for matching).')) return;
-  const btn = document.getElementById('pub-repush-btn');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Re-pushing...';
-
-  let success = 0, errors = 0, total = 0;
-  try {
-    const res = await fetch(API_BASE + '/api/products/push-bulk', {
-      method: 'POST', cache: 'no-store',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({force: true}),
-    });
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const {done, value} = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, {stream: true});
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line);
-          if (msg.type === 'start') { total = msg.total; btn.innerHTML = `<span class="spinner"></span> 0 / ${total}`; }
-          else if (msg.type === 'success') { success++; btn.innerHTML = `<span class="spinner"></span> ${success + errors} / ${total}`; }
-          else if (msg.type === 'error') { errors++; }
-          else if (msg.type === 'complete') { toast(`Re-push complete: ${msg.success} pushed, ${msg.errors} errors`); }
-        } catch (e) {}
-      }
-    }
-  } catch (e) {
-    toast('Re-push error: ' + e.message, 'error');
-  }
-  btn.disabled = false;
-  btn.innerHTML = 'Re-push All';
-  loadPublished(true);
 }
 
 // -----------------------------------------------------------------------

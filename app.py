@@ -23,9 +23,22 @@ from field_mapper import (
     get_metafield,
     build_bluefly_payload,
     build_quantity_price_payload,
+    extract_qty_price_payload,
 )
 
 load_dotenv()
+
+# Per-product lock to serialize concurrent webhook processing
+_product_locks: dict[int, threading.Lock] = {}
+_product_locks_guard = threading.Lock()
+
+
+def _get_product_lock(product_id: int) -> threading.Lock:
+    with _product_locks_guard:
+        if product_id not in _product_locks:
+            _product_locks[product_id] = threading.Lock()
+        return _product_locks[product_id]
+
 
 app = Flask(__name__)
 
@@ -140,6 +153,12 @@ def _sync_product_to_bluefly(file_path: str, record: dict):
     topic = record["topic"]
     product_id = record["payload"].get("id")
 
+    # Serialize processing per product so concurrent webhooks don't race
+    with _get_product_lock(product_id):
+        _sync_product_to_bluefly_inner(file_path, record, topic, product_id)
+
+
+def _sync_product_to_bluefly_inner(file_path, record, topic, product_id):
     print(f"\n[Pipeline] Processing {topic} for product {product_id}")
     tx_logger.update_status(file_path, "processing")
 
@@ -288,6 +307,13 @@ def _sync_product_to_bluefly(file_path: str, record: dict):
 
         if result["success"]:
             print(f"[Pipeline] OK Pushed (products): HTTP {result['status_code']}")
+            # Follow-up: set inventory via quantityprice (products POST may not update qty)
+            try:
+                qp = extract_qty_price_payload(bluefly_payload)
+                bluefly_client.update_quantity_price([qp])
+                print(f"[Pipeline] OK quantityprice follow-up sent")
+            except Exception as qp_err:
+                print(f"[Pipeline] quantityprice follow-up failed: {qp_err}")
             pipeline.update_stage(job_path, "pushed", {
                 "response_status": result["status_code"],
                 "endpoint": "products",
@@ -329,119 +355,134 @@ def _sync_inventory_to_bluefly(file_path: str, record: dict):
         product_id = lookup["product_id"]
         variant_sku = lookup["variant_sku"]
 
-        # Correct the job's product_id — it was created with inventory_item_id
-        pipeline.patch_product_id(job_path, product_id)
-
-        enriched = shopify_client.get_product_full(product_id)
-        if not enriched:
-            raise ValueError(f"Product {product_id} not found")
-
-        metafields = enriched.get("metafields", [])
-        pipeline.update_stage(job_path, "enriched", {
-            "product_id": product_id,
-            "variant_sku": variant_sku,
-        })
-
-        if not should_sync_product(enriched):
-            pipeline.update_stage(job_path, "skipped", {"reason": f"status: {enriched.get('status')}"})
-            tx_logger.update_status(file_path, "processed")
-            return
-
-        category_id = get_metafield(metafields, "custom", "bluefly_category")
-        if not category_id:
-            pipeline.update_stage(job_path, "skipped", {"reason": "no bluefly_category"})
-            tx_logger.update_status(file_path, "processed")
-            return
-
-        # Load config once — used for eligibility checks, price adjustment, and field defaults
-        _cfg_inv = {}
-        try:
-            import dashboard.routes as _dr_inv
-            _cfg_inv = _dr_inv.load_config()
-        except Exception:
-            pass
-        _adj_inv = _cfg_inv.get("price_adjustment_pct", 0)
-        _field_defaults_inv = _cfg_inv.get("field_defaults", {})
-        _elig_inv = _cfg_inv.get("eligibility", {})
-
-        if _elig_inv.get("require_images", True) and not enriched.get("images"):
-            pipeline.update_stage(job_path, "skipped", {"reason": "no images"})
-            tx_logger.update_status(file_path, "processed")
-            return
-
-        if _elig_inv.get("require_quantity", True):
-            total_qty = sum((v.get("inventoryQuantity") or 0) for v in enriched.get("variants", []))
-            if total_qty <= 0:
-                pipeline.update_stage(job_path, "skipped", {"reason": "no inventory"})
-                tx_logger.update_status(file_path, "processed")
-                return
-
-        pipeline.update_stage(job_path, "mapping")
-        sql_field_map = {}
-        variants = enriched.get("variants", [])
-        variant_titles = [v.get("title", "") for v in variants]
-        print(f"[Pipeline/inv] SQL lookup: category={category_id}, "
-              f"{len(variants)} variants, titles={variant_titles}")
-        try:
-            db = BlueflyDBLookup(SQL_SERVER, SQL_DATABASE, SQL_USER, SQL_PASSWORD)
-            with db:
-                for variant in variants:
-                    vt = variant.get("title", "")
-                    if vt:
-                        sql_field_map[vt] = db.lookup_category_fields(category_id, vt)
-                    else:
-                        print(f"[Pipeline/inv] SQL skipped variant with empty title")
-        except Exception as e:
-            print(f"[Pipeline] SQL lookup skipped: {e}")
-        total_fields = sum(len(v) for v in sql_field_map.values())
-        print(f"[Pipeline/inv] SQL done: {len(sql_field_map)} variants mapped, {total_fields} fields")
-        tx_logger.log({
-            "type": "sql_db",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "topic": "sql/lookup",
-            "product_id": product_id,
-            "category_id": category_id,
-            "variant_count": len(sql_field_map),
-            "field_count": sum(len(v) for v in sql_field_map.values()),
-            "status": "unread",
-        })
-
-        # Build lightweight quantityprice payload for inventory updates
-        bluefly_payload = build_quantity_price_payload(
-            enriched, metafields,
-            price_adjustment_pct=_adj_inv,
-            field_defaults=_field_defaults_inv,
-            seller_id=BLUEFLY_SELLER_ID,
-        )
-
-        # Override specific variant's quantity with webhook value
-        for bp in bluefly_payload.get("BuyableProducts", []):
-            if bp.get("SellerSKU") == variant_sku:
-                bp["Quantity"] = new_available
-
-        pipeline.update_stage(job_path, "mapped", {
-            "variant_sku": variant_sku,
-            "quantity": new_available,
-            "endpoint": "quantityprice",
-        })
-
-        pipeline.update_stage(job_path, "pushing")
-        result = bluefly_client.update_quantity_price([bluefly_payload])
-
-        if result["success"]:
-            print(f"[Pipeline] OK Inventory pushed (quantityprice): HTTP {result['status_code']}")
-            pipeline.update_stage(job_path, "pushed", {
-                "response_status": result["status_code"],
-                "endpoint": "quantityprice",
-            })
-            tx_logger.update_status(file_path, "processed")
-        else:
-            raise RuntimeError(f"Bluefly API error (quantityprice): {result['error']}")
+        # Serialize processing per product so concurrent webhooks don't race
+        with _get_product_lock(product_id):
+            _sync_inventory_inner(file_path, record, job_path, product_id, variant_sku, inventory_item_id, new_available)
 
     except Exception as e:
         print(f"[Pipeline] ERROR: {e}")
         pipeline.update_stage(job_path, "error", error=str(e))
         tx_logger.update_status(file_path, "error")
+
+
+def _sync_inventory_inner(file_path, record, job_path, product_id, variant_sku, inventory_item_id, new_available):
+    # Correct the job's product_id — it was created with inventory_item_id
+    pipeline.patch_product_id(job_path, product_id)
+
+    enriched = shopify_client.get_product_full(product_id)
+    if not enriched:
+        raise ValueError(f"Product {product_id} not found")
+
+    metafields = enriched.get("metafields", [])
+    pipeline.update_stage(job_path, "enriched", {
+        "product_id": product_id,
+        "variant_sku": variant_sku,
+    })
+
+    if not should_sync_product(enriched):
+        pipeline.update_stage(job_path, "skipped", {"reason": f"status: {enriched.get('status')}"})
+        tx_logger.update_status(file_path, "processed")
+        return
+
+    category_id = get_metafield(metafields, "custom", "bluefly_category")
+    if not category_id:
+        pipeline.update_stage(job_path, "skipped", {"reason": "no bluefly_category"})
+        tx_logger.update_status(file_path, "processed")
+        return
+
+    # Load config once — used for eligibility checks, price adjustment, and field defaults
+    _cfg_inv = {}
+    try:
+        import dashboard.routes as _dr_inv
+        _cfg_inv = _dr_inv.load_config()
+    except Exception:
+        pass
+    _adj_inv = _cfg_inv.get("price_adjustment_pct", 0)
+    _field_defaults_inv = _cfg_inv.get("field_defaults", {})
+    _elig_inv = _cfg_inv.get("eligibility", {})
+
+    if _elig_inv.get("require_images", True) and not enriched.get("images"):
+        pipeline.update_stage(job_path, "skipped", {"reason": "no images"})
+        tx_logger.update_status(file_path, "processed")
+        return
+
+    if _elig_inv.get("require_quantity", True):
+        total_qty = sum((v.get("inventoryQuantity") or 0) for v in enriched.get("variants", []))
+        if total_qty <= 0:
+            pipeline.update_stage(job_path, "skipped", {"reason": "no inventory"})
+            tx_logger.update_status(file_path, "processed")
+            return
+
+    pipeline.update_stage(job_path, "mapping")
+    sql_field_map = {}
+    variants = enriched.get("variants", [])
+    variant_titles = [v.get("title", "") for v in variants]
+    print(f"[Pipeline/inv] SQL lookup: category={category_id}, "
+          f"{len(variants)} variants, titles={variant_titles}")
+    try:
+        db = BlueflyDBLookup(SQL_SERVER, SQL_DATABASE, SQL_USER, SQL_PASSWORD)
+        with db:
+            for variant in variants:
+                vt = variant.get("title", "")
+                if vt:
+                    sql_field_map[vt] = db.lookup_category_fields(category_id, vt)
+                else:
+                    print(f"[Pipeline/inv] SQL skipped variant with empty title")
+    except Exception as e:
+        print(f"[Pipeline] SQL lookup skipped: {e}")
+    total_fields = sum(len(v) for v in sql_field_map.values())
+    print(f"[Pipeline/inv] SQL done: {len(sql_field_map)} variants mapped, {total_fields} fields")
+    tx_logger.log({
+        "type": "sql_db",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "topic": "sql/lookup",
+        "product_id": product_id,
+        "category_id": category_id,
+        "variant_count": len(sql_field_map),
+        "field_count": sum(len(v) for v in sql_field_map.values()),
+        "status": "unread",
+    })
+
+    # Log Shopify quantities vs webhook quantity to detect race conditions
+    for v in enriched.get("variants", []):
+        print(f"[Pipeline/inv] variant={v.get('title')} shopify_qty={v.get('inventoryQuantity', '?')}")
+    print(f"[Pipeline/inv] webhook says qty={new_available} for item={inventory_item_id}")
+
+    # Full payload with merge logic so merged variants (e.g. 95B+95C+95D → XXL)
+    # get summed quantities and a single SellerSKU.
+    bluefly_payload = build_bluefly_payload(
+        enriched, metafields, sql_field_map,
+        price_adjustment_pct=_adj_inv,
+        field_defaults=_field_defaults_inv,
+        seller_id=BLUEFLY_SELLER_ID,
+    )
+    bluefly_payload.pop("_size_errors", None)
+
+    pipeline.update_stage(job_path, "mapped", {
+        "variant_sku": variant_sku,
+        "quantity": new_available,
+        "endpoint": "products",
+    })
+
+    pipeline.update_stage(job_path, "pushing")
+    result = bluefly_client.push_products([bluefly_payload])
+
+    if result["success"]:
+        print(f"[Pipeline] OK Inventory pushed (products): HTTP {result['status_code']}")
+        # Follow-up: set inventory via quantityprice
+        try:
+            qp = extract_qty_price_payload(bluefly_payload)
+            bluefly_client.update_quantity_price([qp])
+            print(f"[Pipeline] OK quantityprice follow-up sent")
+        except Exception as qp_err:
+            print(f"[Pipeline] quantityprice follow-up failed: {qp_err}")
+        pipeline.update_stage(job_path, "pushed", {
+            "response_status": result["status_code"],
+            "endpoint": "products+quantityprice",
+        })
+        tx_logger.update_status(file_path, "processed")
+    else:
+        raise RuntimeError(f"Bluefly API error (products): {result['error']}")
 
 
 def verify_shopify_hmac(data: bytes, hmac_header: str, secret: str) -> bool:

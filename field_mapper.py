@@ -611,6 +611,28 @@ def build_quantity_price_payload(
     }
 
 
+def extract_qty_price_payload(full_payload: dict) -> dict:
+    """Extract a quantityprice payload from a full bluefly product payload.
+
+    Reuses the merged BuyableProducts so variant-collapsed sizes
+    (e.g. 95B+95C+95D → XXL) keep their summed quantities.
+    """
+    return {
+        "Fields": [],
+        "SellerSKU": full_payload["SellerSKU"],
+        "BuyableProducts": [
+            {
+                "Fields": [f for f in bp["Fields"]
+                           if f["Name"] in ("price", "special_price", "is_returnable")],
+                "Quantity": bp["Quantity"],
+                "SellerSKU": bp["SellerSKU"],
+                "ListingStatus": bp["ListingStatus"],
+            }
+            for bp in full_payload.get("BuyableProducts", [])
+        ],
+    }
+
+
 def _build_options(variants: list, metafields: list) -> list[dict]:
     """
     Build the product-level Options array for Rithum.

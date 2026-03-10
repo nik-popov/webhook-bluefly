@@ -39,6 +39,7 @@ from field_mapper import (
     get_metafield,
     build_bluefly_payload,
     build_quantity_price_payload,
+    extract_qty_price_payload,
     parse_seller_sku,
 )
 
@@ -568,23 +569,9 @@ def api_push_product():
             endpoint_label = "products-post"
 
         if result["success"]:
-            # Follow-up: set quantity via quantityprice using the same
-            # merged BuyableProducts so inventory reflects summed stock.
-            qp_payload = {
-                "Fields": [],
-                "SellerSKU": bluefly_payload["SellerSKU"],
-                "BuyableProducts": [
-                    {
-                        "Fields": [f for f in bp["Fields"]
-                                   if f["Name"] in ("price", "special_price", "is_returnable")],
-                        "Quantity": bp["Quantity"],
-                        "SellerSKU": bp["SellerSKU"],
-                        "ListingStatus": bp["ListingStatus"],
-                    }
-                    for bp in bluefly_payload.get("BuyableProducts", [])
-                ],
-            }
+            # Follow-up: set inventory via quantityprice
             try:
+                qp_payload = extract_qty_price_payload(bluefly_payload)
                 bluefly.update_quantity_price([qp_payload])
             except Exception as qp_err:
                 print(f"[Dashboard] quantityprice follow-up failed: {qp_err}")
@@ -612,14 +599,7 @@ def api_push_product():
 
 @dashboard_bp.route("/api/products/push-bulk", methods=["POST"])
 def api_push_bulk():
-    """Push all unpushed eligible products. Streams NDJSON progress.
-
-    Body params (JSON, all optional):
-      force (bool): If true, re-sync all eligible products regardless of previous push history.
-                    Use this to backfill after downtime when webhook events were missed.
-    """
-    body = request.get_json(silent=True) or {}
-    force = bool(body.get("force", False))
+    """Push all unpushed eligible products. Streams NDJSON progress."""
 
     def generate():
         clients = _get_clients()
@@ -650,12 +630,9 @@ def api_push_bulk():
         if elig.get("require_brand_product_id", True):
             eligible = [p for p in eligible if p.get("brand_product_id")]
 
-        # Check which are already synced (skipped when force=True)
+        # Check which are already synced
         synced = _get_synced_product_ids(pipeline.log_dir)
-        if force:
-            to_push = eligible
-        else:
-            to_push = [p for p in eligible if p["id"] not in synced or synced[p["id"]]["status"] != "pushed"]
+        to_push = [p for p in eligible if p["id"] not in synced or synced[p["id"]]["status"] != "pushed"]
 
         yield json.dumps({"type": "start", "total": len(to_push)}) + "\n"
 
@@ -1263,30 +1240,23 @@ def api_sync_qty_price():
         adj = cfg.get("price_adjustment_pct", 0)
         field_defaults = cfg.get("field_defaults", {})
 
-        # Use build_bluefly_payload (which has size-merge logic) so that
-        # variants collapsed to the same size (e.g. 95B+95C+95D → XXL)
-        # get their quantities summed correctly.
-        full = build_bluefly_payload(
+        # Apply per-product category/size overrides (same as push route)
+        override_cat = cfg.get("category_overrides", {}).get(str(product_id))
+        if override_cat:
+            _patch_metafield(metafields, "custom", "bluefly_category", override_cat)
+        sf_override = cfg.get("size_field_overrides", {}).get(str(product_id))
+        if sf_override:
+            _patch_metafield(metafields, "custom", "size_field_override", sf_override)
+
+        # Full re-push (PUT) with merged quantities — most reliable way
+        # to ensure Bluefly gets correct inventory + price.
+        bluefly_payload = build_bluefly_payload(
             enriched, metafields, {},
             price_adjustment_pct=adj,
             field_defaults=field_defaults,
             seller_id=bluefly.seller_id,
         )
-        full.pop("_size_errors", None)
-        qp = {
-            "Fields": [],
-            "SellerSKU": full["SellerSKU"],
-            "BuyableProducts": [
-                {
-                    "Fields": [f for f in bp["Fields"]
-                               if f["Name"] in ("price", "special_price", "is_returnable")],
-                    "Quantity": bp["Quantity"],
-                    "SellerSKU": bp["SellerSKU"],
-                    "ListingStatus": bp["ListingStatus"],
-                }
-                for bp in full.get("BuyableProducts", [])
-            ],
-        }
+        bluefly_payload.pop("_size_errors", None)
 
         job_path = pipeline.create_job(
             source_file="dashboard-sync-qty",
@@ -1295,9 +1265,25 @@ def api_sync_qty_price():
             event_id=f"sync-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
         )
 
-        result = bluefly.update_quantity_price([qp])
+        # Log what we're sending so we can diagnose quantity issues
+        bp_summary = [
+            {"sku": bp["SellerSKU"], "qty": bp["Quantity"], "size": next((f["Value"] for f in bp["Fields"] if f["Name"].startswith("size_")), None)}
+            for bp in bluefly_payload.get("BuyableProducts", [])
+        ]
+        print(f"[Sync] product={product_id} SellerSKU={bluefly_payload.get('SellerSKU')} buyables={bp_summary}")
+
+        result = bluefly.push_products([bluefly_payload])
+        print(f"[Sync] result: success={result['success']} status={result.get('status_code')} body={result.get('body', '')[:500]}")
 
         if result["success"]:
+            # Follow-up: set inventory via quantityprice
+            try:
+                qp = extract_qty_price_payload(bluefly_payload)
+                qp_result = bluefly.update_quantity_price([qp])
+                print(f"[Sync] quantityprice follow-up: success={qp_result['success']} status={qp_result.get('status_code')}")
+            except Exception as qp_err:
+                print(f"[Sync] quantityprice follow-up failed: {qp_err}")
+
             pipeline.update_stage(job_path, "pushed", {
                 "response_status": result["status_code"],
                 "source": "dashboard-sync",
@@ -1306,6 +1292,7 @@ def api_sync_qty_price():
                 "success": True,
                 "status_code": result["status_code"],
                 "product_title": enriched.get("title", ""),
+                "buyables": bp_summary,
             })
         else:
             pipeline.update_stage(job_path, "error", error=result["error"])
