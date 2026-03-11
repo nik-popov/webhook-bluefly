@@ -2057,7 +2057,7 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
   }
   tbody.innerHTML = products.map(p => {
     const img = p.image_url
-      ? `<img src="${p.image_url.includes('cdn.shopify.com') ? p.image_url + '&width=80' : p.image_url}" class="prod-img" loading="lazy" style="cursor:pointer" onclick="openImgEditor(${p.id})" onerror="this.outerHTML='<div class=prod-img-placeholder>?</div>'">`
+      ? `<img src="${imgSrc(p.image_url, 80)}" class="prod-img" loading="lazy" style="cursor:pointer" onclick="openImgEditor(${p.id})" onerror="this.outerHTML='<div class=prod-img-placeholder>?</div>'">`
       : '<div class="prod-img-placeholder">?</div>';
 
     let statusBadge;
@@ -2175,7 +2175,7 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
   }
   tbody.innerHTML = products.map(p => {
     const img = p.image_url
-      ? `<img src="${p.image_url.includes('cdn.shopify.com') ? p.image_url + '&width=80' : p.image_url}" class="prod-img" loading="lazy" style="cursor:pointer" onclick="openImgEditor(${p.id})" onerror="this.outerHTML='<div class=prod-img-placeholder>?</div>'">`
+      ? `<img src="${imgSrc(p.image_url, 80)}" class="prod-img" loading="lazy" style="cursor:pointer" onclick="openImgEditor(${p.id})" onerror="this.outerHTML='<div class=prod-img-placeholder>?</div>'">`
       : '<div class="prod-img-placeholder">?</div>';
 
     let priceDisplay = '-';
@@ -3151,6 +3151,12 @@ function updatePricePreview() {
 // -----------------------------------------------------------------------
 // Utility
 // -----------------------------------------------------------------------
+function imgSrc(url, width) {
+  if (!url) return '';
+  if (url.includes('cdn.shopify.com')) return url + (width ? '&width=' + width : '');
+  return '/api/image-proxy?url=' + encodeURIComponent(url);
+}
+
 function esc(s) {
   if (!s) return '';
   const d = document.createElement('div');
@@ -3722,7 +3728,7 @@ function renderImgThumbs() {
         : '';
     return `<div onclick="selectEditorImage(${i})" style="position:relative;cursor:pointer;flex-shrink:0;">
       ${badge}
-      <img src="${img.effective_url.includes('cdn.shopify.com') ? esc(img.effective_url) + '&width=80' : esc(img.effective_url)}" style="width:52px;height:52px;border-radius:6px;object-fit:cover;border:${border};background:#f3f4f6;"
+      <img src="${imgSrc(img.effective_url, 80)}" style="width:52px;height:52px;border-radius:6px;object-fit:cover;border:${border};background:#f3f4f6;"
            onerror="this.style.background='#fecaca';this.alt='Error'">
     </div>`;
   }).join('');
@@ -3733,29 +3739,26 @@ function selectEditorImage(index) {
   const img = _imgEdImages[index];
   if (!img) return;
   renderImgThumbs();
-  const previewUrl = img.effective_url.includes('cdn.shopify.com') ? img.effective_url + '&width=800' : img.effective_url;
-  document.getElementById('img-preview-large').src = previewUrl;
+  document.getElementById('img-preview-large').src = imgSrc(img.effective_url, 800);
 
   // Info bar
   const ext = getUrlExtension(img.original_url);
   const effectiveExt = getUrlExtension(img.effective_url);
   let info = `Image ${index + 1} of ${_imgEdImages.length}`;
-  if (ext) info += ` &middot; Original format: <strong>${ext.toUpperCase()}</strong>`;
-  if (img.has_override) info += ` &middot; <span style="color:#22c55e;">Override active (${effectiveExt.toUpperCase()})</span>`;
-  if (!img.valid_format) info += ` &middot; <span style="color:#ef4444;">Format not supported by Bluefly</span>`;
+  if (ext) info += ` &middot; <strong>${ext.toUpperCase()}</strong>`;
+  if (img.has_override) info += ` &middot; <span style="color:#22c55e;">Override (${effectiveExt.toUpperCase()})</span>`;
+  if (!img.valid_format) info += ` &middot; <span style="color:#ef4444;">Unsupported format</span>`;
   document.getElementById('img-info-bar').innerHTML = info;
 
   // Action bar
   let actions = '';
-  if (!img.valid_format) {
-    actions += `<button class="btn btn-primary btn-sm" onclick="convertImageFormat(${index}, 'jpg')">Convert to JPG</button>`;
-    actions += `<button class="btn btn-outline btn-sm" onclick="convertImageFormat(${index}, 'png')">Convert to PNG</button>`;
-  } else if (img.has_override) {
-    actions += `<button class="btn btn-outline btn-sm" onclick="removeImageOverride(${index})">Revert to Original</button>`;
+  if (img.has_override) {
+    actions += `<button class="btn btn-outline btn-sm" onclick="removeImageOverride(${index})">Revert</button>`;
   }
-  actions += `<button class="btn btn-outline btn-sm" onclick="convertImageFormat(${index}, 'jpg')">To JPG</button>`;
-  actions += `<button class="btn btn-outline btn-sm" onclick="convertImageFormat(${index}, 'png')">To PNG</button>`;
-  actions += `<button class="btn btn-outline btn-sm" onclick="enterEditMode(${index})">Edit (Crop/Rotate)</button>`;
+  const jpgStyle = !img.valid_format ? 'btn-primary' : 'btn-outline';
+  actions += `<button class="btn ${jpgStyle} btn-sm" onclick="convertImageFormat(${index}, 'jpg')">JPG</button>`;
+  actions += `<button class="btn btn-outline btn-sm" onclick="convertImageFormat(${index}, 'png')">PNG</button>`;
+  actions += `<button class="btn btn-outline btn-sm" onclick="enterEditMode(${index})">Edit</button>`;
   document.getElementById('img-action-bar').innerHTML = actions;
 }
 

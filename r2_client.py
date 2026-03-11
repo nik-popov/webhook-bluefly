@@ -46,3 +46,23 @@ def delete(key: str):
     """Delete an object from R2."""
     client = _get_client()
     client.delete_object(Bucket=_bucket(), Key=key)
+
+
+def set_cors(allowed_origins=None):
+    """Set CORS rules on the bucket."""
+    if allowed_origins is None:
+        allowed_origins = ["*"]
+    client = _get_client()
+    client.put_bucket_cors(
+        Bucket=_bucket(),
+        CORSConfiguration={
+            "CORSRules": [
+                {
+                    "AllowedOrigins": allowed_origins,
+                    "AllowedMethods": ["GET", "HEAD"],
+                    "AllowedHeaders": ["*"],
+                    "MaxAgeSeconds": 86400,
+                }
+            ]
+        },
+    )
