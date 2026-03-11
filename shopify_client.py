@@ -8,15 +8,19 @@ to support the Shopify → Bluefly sync pipeline.
 import json
 import time
 import uuid
-from urllib.request import Request, urlopen
-from urllib.error import HTTPError
-from urllib.parse import urlencode
+
+import requests as req_lib
 
 
 class ShopifyClient:
     def __init__(self, store: str, access_token: str, api_version: str = "2025-01"):
         self.base_url = f"https://{store}/admin/api/{api_version}/graphql.json"
         self.access_token = access_token
+        self._session = req_lib.Session()
+        self._session.headers.update({
+            "Content-Type": "application/json",
+            "X-Shopify-Access-Token": self.access_token,
+        })
 
     def graphql(self, query: str, variables: dict = None) -> dict:
         """Execute a GraphQL query against Shopify Admin API."""
@@ -24,15 +28,11 @@ class ShopifyClient:
         if variables:
             body_dict["variables"] = variables
 
-        body = json.dumps(body_dict).encode("utf-8")
-        req = Request(self.base_url, data=body, method="POST")
-        req.add_header("Content-Type", "application/json")
-        req.add_header("X-Shopify-Access-Token", self.access_token)
-
         for attempt in range(1, 4):
             try:
-                resp = urlopen(req, timeout=30)
-                result = json.loads(resp.read())
+                resp = self._session.post(self.base_url, json=body_dict, timeout=30)
+                resp.raise_for_status()
+                result = resp.json()
 
                 # Proactive throttle management: pause if running low on budget
                 extensions = result.get("extensions", {})
@@ -47,13 +47,13 @@ class ShopifyClient:
                         time.sleep(wait)
 
                 return result
-            except HTTPError as e:
-                if e.code == 429:
-                    retry_after = int(e.headers.get("Retry-After", 2))
+            except req_lib.exceptions.HTTPError as e:
+                if e.response.status_code == 429:
+                    retry_after = int(e.response.headers.get("Retry-After", 2))
                     print(f"  Shopify rate limited, waiting {retry_after}s...")
                     time.sleep(retry_after)
                     continue
-                if e.code >= 500:
+                if e.response.status_code >= 500:
                     wait = 2 ** attempt
                     print(f"  Shopify 5xx error, retry {attempt}/3 after {wait}s")
                     time.sleep(wait)
@@ -810,34 +810,15 @@ class ShopifyClient:
         params = target.get("parameters", [])
         resource_url = target.get("resourceUrl", "")
 
-        # Build multipart form data
-        boundary = uuid.uuid4().hex
-        body_parts = []
-        for p in params:
-            body_parts.append(
-                f'--{boundary}\r\n'
-                f'Content-Disposition: form-data; name="{p["name"]}"\r\n\r\n'
-                f'{p["value"]}\r\n'
-            )
-        body_parts.append(
-            f'--{boundary}\r\n'
-            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-            f'Content-Type: {mime_type}\r\n\r\n'
-        )
-        # Assemble: text parts + file bytes + closing boundary
-        body_prefix = "".join(body_parts).encode("utf-8")
-        body_suffix = f"\r\n--{boundary}--\r\n".encode("utf-8")
-        body = body_prefix + file_bytes + body_suffix
-
-        req = Request(upload_url, data=body, method="POST")
-        req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-        req.add_header("Content-Length", str(len(body)))
+        # Build multipart form fields
+        form_data = {p["name"]: (None, p["value"]) for p in params}
+        form_data["file"] = (filename, file_bytes, mime_type)
 
         try:
-            resp = urlopen(req, timeout=30)
-            if resp.status in (200, 201, 204):
+            resp = req_lib.post(upload_url, files=form_data, timeout=30)
+            if resp.status_code in (200, 201, 204):
                 return resource_url
             return None
-        except HTTPError as e:
-            print(f"[Shopify] Staged upload failed: {e.code} {e.read().decode()}")
+        except req_lib.exceptions.RequestException as e:
+            print(f"[Shopify] Staged upload failed: {e}")
             return None

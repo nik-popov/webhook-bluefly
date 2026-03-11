@@ -17,6 +17,7 @@ from pipeline_logger import PipelineLogger
 from shopify_client import ShopifyClient
 from bluefly_client import BlueflyClient
 from sql_lookup import BlueflyDBLookup
+from d1_client import get_d1_client
 from field_mapper import (
     should_sync_product,
     is_default_only_product,
@@ -91,10 +92,6 @@ BLUEFLY_API_URL = os.environ.get(
 BLUEFLY_SELLER_ID = os.environ.get("BLUEFLY_SELLER_ID", "")
 BLUEFLY_SELLER_TOKEN = os.environ.get("BLUEFLY_SELLER_TOKEN", "")
 
-SQL_SERVER = os.environ.get("SQL_SERVER", "")
-SQL_DATABASE = os.environ.get("SQL_DATABASE", "")
-SQL_USER = os.environ.get("SQL_USER", "")
-SQL_PASSWORD = os.environ.get("SQL_PASSWORD", "")
 
 _oauth_nonce = ""
 
@@ -254,6 +251,62 @@ def _sync_product_to_bluefly_inner(file_path, record, topic, product_id):
             tx_logger.update_status(file_path, "processed")
             return
 
+        # Apply per-product overrides (same as dashboard push)
+        try:
+            from product_store import get_product_store
+            from dashboard.routes import _patch_metafield, _apply_image_overrides, _resolve_bpid_template
+            _store = get_product_store()
+            _ovr = _store.get_all_overrides_for_product(str(product_id))
+
+            if _ovr["category"]:
+                category_id = _ovr["category"]
+                _patch_metafield(metafields, "custom", "bluefly_category", _ovr["category"])
+            if _ovr["size_field"]:
+                _patch_metafield(metafields, "custom", "size_field_override", _ovr["size_field"])
+            if _ovr["title"]:
+                enriched["title"] = _ovr["title"]
+            if _ovr["vendor"]:
+                enriched["vendor"] = _ovr["vendor"]
+            if _ovr["brand_product_id"]:
+                _variants = enriched.get("variants", [])
+                bpid_product = {
+                    "id": enriched.get("id", product_id),
+                    "title": enriched.get("title", ""),
+                    "vendor": enriched.get("vendor", ""),
+                    "product_type": enriched.get("productType", ""),
+                    "first_sku": (_variants[0].get("sku", "") if _variants else ""),
+                    "first_variant_sku": (_variants[0].get("sku", "") if _variants else ""),
+                    "brand_product_id": get_metafield(metafields, "custom", "brand_product_id") or "",
+                    "gender": get_metafield(metafields, "custom", "gender") or "",
+                    "color": get_metafield(metafields, "custom", "color") or "",
+                    "variant_ids": [str(v.get("id", "")).split("/")[-1] for v in _variants if v.get("id")],
+                    "variant_skus": [v.get("sku", "") for v in _variants if v.get("sku")],
+                }
+                resolved = _resolve_bpid_template(_ovr["brand_product_id"], bpid_product)
+                if resolved:
+                    _patch_metafield(metafields, "custom", "brand_product_id", resolved)
+            # Price override
+            price_ov_raw = _ovr["price"]
+            if price_ov_raw:
+                try:
+                    price_ov = json.loads(price_ov_raw) if isinstance(price_ov_raw, str) else price_ov_raw
+                except (json.JSONDecodeError, TypeError):
+                    price_ov = None
+                if price_ov:
+                    if price_ov.get("type") == "fixed":
+                        for v in enriched.get("variants", []):
+                            v["price"] = str(price_ov["value"])
+                        _adj = 0
+                    elif price_ov.get("type") == "pct":
+                        _adj = float(price_ov["value"])
+            # Image overrides
+            _apply_image_overrides(enriched, product_id, image_overrides=_ovr["image"])
+            ovr_applied = [k for k in ("category", "size_field", "title", "vendor", "brand_product_id", "price") if _ovr.get(k)]
+            if ovr_applied or _ovr.get("image"):
+                print(f"[Pipeline] Overrides applied: {', '.join(ovr_applied)}" + (f", images: {len(_ovr['image'])}" if _ovr.get("image") else ""))
+        except Exception as ovr_err:
+            print(f"[Pipeline] Override loading skipped: {ovr_err}")
+
         # Map (SQL lookup with graceful fallback)
         pipeline.update_stage(job_path, "mapping")
         sql_field_map = {}
@@ -262,14 +315,9 @@ def _sync_product_to_bluefly_inner(file_path, record, topic, product_id):
         print(f"[Pipeline] SQL lookup: category={category_id}, "
               f"{len(variants)} variants, titles={variant_titles}")
         try:
-            db = BlueflyDBLookup(SQL_SERVER, SQL_DATABASE, SQL_USER, SQL_PASSWORD)
-            with db:
-                for variant in variants:
-                    vt = variant.get("title", "")
-                    if vt:
-                        sql_field_map[vt] = db.lookup_category_fields(category_id, vt)
-                    else:
-                        print(f"[Pipeline] SQL skipped variant with empty title")
+            db = BlueflyDBLookup(get_d1_client())
+            vt_list = [v.get("title", "") for v in variants if v.get("title", "")]
+            sql_field_map = db.lookup_category_fields_batch(category_id, vt_list)
         except Exception as e:
             print(f"[Pipeline] SQL lookup skipped: {e}")
         total_fields = sum(len(v) for v in sql_field_map.values())
@@ -420,6 +468,62 @@ def _sync_inventory_inner(file_path, record, job_path, product_id, variant_sku, 
         tx_logger.update_status(file_path, "processed")
         return
 
+    # Apply per-product overrides (same as dashboard push)
+    try:
+        from product_store import get_product_store
+        from dashboard.routes import _patch_metafield, _apply_image_overrides, _resolve_bpid_template
+        _store_inv = get_product_store()
+        _ovr_inv = _store_inv.get_all_overrides_for_product(str(product_id))
+
+        if _ovr_inv["category"]:
+            category_id = _ovr_inv["category"]
+            _patch_metafield(metafields, "custom", "bluefly_category", _ovr_inv["category"])
+        if _ovr_inv["size_field"]:
+            _patch_metafield(metafields, "custom", "size_field_override", _ovr_inv["size_field"])
+        if _ovr_inv["title"]:
+            enriched["title"] = _ovr_inv["title"]
+        if _ovr_inv["vendor"]:
+            enriched["vendor"] = _ovr_inv["vendor"]
+        if _ovr_inv["brand_product_id"]:
+            _variants_inv = enriched.get("variants", [])
+            bpid_product = {
+                "id": enriched.get("id", product_id),
+                "title": enriched.get("title", ""),
+                "vendor": enriched.get("vendor", ""),
+                "product_type": enriched.get("productType", ""),
+                "first_sku": (_variants_inv[0].get("sku", "") if _variants_inv else ""),
+                "first_variant_sku": (_variants_inv[0].get("sku", "") if _variants_inv else ""),
+                "brand_product_id": get_metafield(metafields, "custom", "brand_product_id") or "",
+                "gender": get_metafield(metafields, "custom", "gender") or "",
+                "color": get_metafield(metafields, "custom", "color") or "",
+                "variant_ids": [str(v.get("id", "")).split("/")[-1] for v in _variants_inv if v.get("id")],
+                "variant_skus": [v.get("sku", "") for v in _variants_inv if v.get("sku")],
+            }
+            resolved = _resolve_bpid_template(_ovr_inv["brand_product_id"], bpid_product)
+            if resolved:
+                _patch_metafield(metafields, "custom", "brand_product_id", resolved)
+        # Price override
+        price_ov_raw = _ovr_inv["price"]
+        if price_ov_raw:
+            try:
+                price_ov = json.loads(price_ov_raw) if isinstance(price_ov_raw, str) else price_ov_raw
+            except (json.JSONDecodeError, TypeError):
+                price_ov = None
+            if price_ov:
+                if price_ov.get("type") == "fixed":
+                    for v in enriched.get("variants", []):
+                        v["price"] = str(price_ov["value"])
+                    _adj_inv = 0
+                elif price_ov.get("type") == "pct":
+                    _adj_inv = float(price_ov["value"])
+        # Image overrides
+        _apply_image_overrides(enriched, product_id, image_overrides=_ovr_inv["image"])
+        ovr_applied = [k for k in ("category", "size_field", "title", "vendor", "brand_product_id", "price") if _ovr_inv.get(k)]
+        if ovr_applied or _ovr_inv.get("image"):
+            print(f"[Pipeline/inv] Overrides applied: {', '.join(ovr_applied)}" + (f", images: {len(_ovr_inv['image'])}" if _ovr_inv.get("image") else ""))
+    except Exception as ovr_err:
+        print(f"[Pipeline/inv] Override loading skipped: {ovr_err}")
+
     pipeline.update_stage(job_path, "mapping")
     sql_field_map = {}
     variants = enriched.get("variants", [])
@@ -427,14 +531,9 @@ def _sync_inventory_inner(file_path, record, job_path, product_id, variant_sku, 
     print(f"[Pipeline/inv] SQL lookup: category={category_id}, "
           f"{len(variants)} variants, titles={variant_titles}")
     try:
-        db = BlueflyDBLookup(SQL_SERVER, SQL_DATABASE, SQL_USER, SQL_PASSWORD)
-        with db:
-            for variant in variants:
-                vt = variant.get("title", "")
-                if vt:
-                    sql_field_map[vt] = db.lookup_category_fields(category_id, vt)
-                else:
-                    print(f"[Pipeline/inv] SQL skipped variant with empty title")
+        db = BlueflyDBLookup(get_d1_client())
+        vt_list = [v.get("title", "") for v in variants if v.get("title", "")]
+        sql_field_map = db.lookup_category_fields_batch(category_id, vt_list)
     except Exception as e:
         print(f"[Pipeline] SQL lookup skipped: {e}")
     total_fields = sum(len(v) for v in sql_field_map.values())

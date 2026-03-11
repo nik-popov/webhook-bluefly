@@ -506,6 +506,11 @@
       <option value="">All Types</option>
       <option value="webhook_shopify">Webhook</option>
       <option value="sql_db">SQL DB</option>
+      <option value="gemini">Gemini</option>
+      <option value="push">Push</option>
+      <option value="catalog">Catalog</option>
+      <option value="delete">Delete</option>
+      <option value="order">Order</option>
     </select>
     <button class="btn btn-primary" onclick="processEvents()">Scan &amp; Process</button>
     <button class="btn btn-outline" onclick="loadEvents()">Refresh</button>
@@ -847,10 +852,10 @@
       </div>
       <div style="position:relative;display:inline-block;">
         <canvas id="img-edit-canvas" style="max-width:100%;border:1px solid var(--border);border-radius:4px;cursor:default;"></canvas>
-        <div id="img-crop-overlay" style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;cursor:crosshair;"></div>
+        <canvas id="img-crop-canvas" style="display:none;position:absolute;top:0;left:0;width:100%;height:100%;cursor:crosshair;"></canvas>
       </div>
       <div id="img-crop-actions" style="display:none;margin-top:8px;display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;">
-        <select id="crop-aspect-ratio" onchange="_cropAspectRatio=this.value;if(_imgEdCropRect){_imgEdCropRect=_constrainRectToAspect(_imgEdCropRect,_cropAspectRatio);imgEdRedraw()}" style="padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;">
+        <select id="crop-aspect-ratio" onchange="_cropAspectRatio=this.value;if(_imgEdCropRect){_imgEdCropRect=_constrainRectToAspect(_imgEdCropRect,_cropAspectRatio);imgEdRedrawCropOverlay()}" style="padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;">
           <option value="free">Free</option>
           <option value="1:1">1:1 Square</option>
           <option value="4:3">4:3</option>
@@ -3193,12 +3198,22 @@ function renderEventsPage(page) {
     else if (ev.status === 'unread') badge = '<span class="badge badge-warning">Unread</span>';
     else if (ev.status === 'processing') badge = '<span class="badge badge-info">Processing</span>';
     else badge = `<span class="badge badge-gray">${esc(ev.status)}</span>`;
-    const typeBadge = ev.type === 'sql_db'
-      ? '<span class="badge badge-info">SQL DB</span>'
-      : '<span class="badge badge-gray">Webhook</span>';
-    const topicExtra = ev.type === 'sql_db' && ev.category_id
-      ? `<br><span style="font-size:10px;color:var(--text-muted)">cat:${esc(String(ev.category_id))} &nbsp;fields:${ev.field_count ?? 0}</span>`
-      : '';
+    const typeBadgeMap = {
+      'sql_db': '<span class="badge badge-info">SQL DB</span>',
+      'gemini': '<span class="badge" style="background:#a855f7;color:#fff;">Gemini</span>',
+      'push': '<span class="badge badge-success">Push</span>',
+      'catalog': '<span class="badge" style="background:#f97316;color:#fff;">Catalog</span>',
+      'delete': '<span class="badge badge-error">Delete</span>',
+      'order': '<span class="badge" style="background:#3b82f6;color:#fff;">Order</span>',
+      'webhook_shopify': '<span class="badge badge-gray">Webhook</span>',
+    };
+    const typeBadge = typeBadgeMap[ev.type] || '<span class="badge badge-gray">' + esc(ev.type) + '</span>';
+    let topicExtra = '';
+    if (ev.type === 'sql_db' && ev.category_id) {
+      topicExtra = `<br><span style="font-size:10px;color:var(--text-muted)">cat:${esc(String(ev.category_id))} &nbsp;fields:${ev.field_count ?? 0}</span>`;
+    } else if (ev.detail) {
+      topicExtra = `<br><span style="font-size:10px;color:var(--text-muted)">${esc(ev.detail)}</span>`;
+    }
     const time = ev.timestamp ? new Date(ev.timestamp).toLocaleString() : '-';
     return `<tr>
       <td>${time}</td>
@@ -3886,9 +3901,14 @@ async function openImgEditor(productId) {
     const data = await resp.json();
     if (!resp.ok) { toast(data.error || 'Failed to load images', 'error'); closeImgEditor(); return; }
     _imgEdImages = data.images || [];
+    if (_imgEdImages.length === 0) {
+      toast('No images found for this product', 'error');
+      closeImgEditor();
+      return;
+    }
     document.getElementById('img-editor-title').textContent = `Product Images (${_imgEdImages.length})`;
     renderImgThumbs();
-    if (_imgEdImages.length > 0) selectEditorImage(0);
+    selectEditorImage(0);
     // Check for unsupported formats and show auto-fix overlay
     const unsupported = _imgEdImages.filter(img => !img.valid_format);
     if (unsupported.length > 0) {
@@ -3939,7 +3959,7 @@ function _recalcEligibility(p) {
 function renderImgThumbs() {
   const strip = document.getElementById('img-thumb-strip');
   if (!_imgEdImages.length) { strip.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">No images</span>'; return; }
-  strip.innerHTML = _imgEdImages.map((img, i) => {
+  let html = _imgEdImages.map((img, i) => {
     const border = i === _imgEdSelected ? '3px solid var(--primary)' : '2px solid var(--border)';
     const badge = !img.valid_format
       ? '<span style="position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;font-size:9px;padding:1px 4px;border-radius:8px;">!</span>'
@@ -3952,6 +3972,9 @@ function renderImgThumbs() {
            onerror="this.style.background='#fecaca';this.alt='Error'">
     </div>`;
   }).join('');
+  // "+" button to add new image
+  html += `<div onclick="showAddImageUI()" style="cursor:pointer;flex-shrink:0;width:52px;height:52px;border:2px dashed var(--border);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:22px;color:var(--text-muted);background:#f8fafc;" title="Add image">+</div>`;
+  strip.innerHTML = html;
 }
 
 function selectEditorImage(index) {
@@ -3972,12 +3995,21 @@ function selectEditorImage(index) {
 
   // Action bar
   let actions = '';
+  // Reorder buttons
+  if (index > 0) actions += `<button class="btn btn-outline btn-sm" onclick="moveImage(-1)" title="Move left">&#8592;</button>`;
+  if (index < _imgEdImages.length - 1) actions += `<button class="btn btn-outline btn-sm" onclick="moveImage(1)" title="Move right">&#8594;</button>`;
+  actions += '<span style="width:1px;height:20px;background:var(--border);margin:0 4px;"></span>';
   if (img.has_override) {
     actions += `<button class="btn btn-outline btn-sm" onclick="removeImageOverride(${index})">Revert</button>`;
   }
   actions += `<button class="btn btn-outline btn-sm" onclick="showConvertMenu(${index})">Convert</button>`;
   actions += `<button class="btn btn-outline btn-sm" onclick="enterEditMode(${index})">Edit</button>`;
   actions += `<button class="btn btn-outline btn-sm" onclick="showGenerateUI()">Generate</button>`;
+  actions += `<button class="btn btn-outline btn-sm" onclick="showAddImageUI()">Add URL</button>`;
+  // Delete (only for override/extra images, and only if more than 1 image)
+  if (img.has_override && _imgEdImages.length > 1) {
+    actions += `<button class="btn btn-outline btn-sm" style="color:#ef4444;border-color:#ef4444;" onclick="deleteImage(${index})">Delete</button>`;
+  }
   document.getElementById('img-action-bar').innerHTML = actions;
 }
 
@@ -4093,6 +4125,106 @@ async function removeImageOverride(index) {
   } catch (e) { toast('Error: ' + e.message, 'error'); }
 }
 
+// ---- Image Management (reorder, delete, add) ----
+
+async function moveImage(direction) {
+  const from = _imgEdSelected;
+  const to = from + direction;
+  if (to < 0 || to >= _imgEdImages.length) return;
+
+  // Build new order array
+  const order = _imgEdImages.map((_, i) => i);
+  [order[from], order[to]] = [order[to], order[from]];
+
+  try {
+    const resp = await fetch(`/api/products/${_imgEdProductId}/images/reorder`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({order})
+    });
+    if (!resp.ok) { toast('Reorder failed', 'error'); return; }
+
+    // Swap in local array
+    [_imgEdImages[from], _imgEdImages[to]] = [_imgEdImages[to], _imgEdImages[from]];
+    // Update indices
+    _imgEdImages.forEach((img, i) => img.index = i);
+    _imgEdChanged = true;
+    selectEditorImage(to);
+    toast('Image moved');
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function deleteImage(index) {
+  if (_imgEdImages.length <= 1) { toast('Must keep at least 1 image', 'error'); return; }
+
+  const img = _imgEdImages[index];
+  if (!img) return;
+
+  try {
+    // Delete the override (backend will re-index)
+    const resp = await fetch(`/api/products/${_imgEdProductId}/images/override`, {
+      method: 'DELETE',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({image_index: img.index})
+    });
+    if (!resp.ok) { toast('Delete failed', 'error'); return; }
+
+    // Re-fetch image list to get updated indices
+    const listResp = await fetch(`/api/products/${_imgEdProductId}/images`);
+    const listData = await listResp.json();
+    if (listResp.ok) {
+      _imgEdImages = listData.images || [];
+      document.getElementById('img-editor-title').textContent = `Product Images (${_imgEdImages.length})`;
+      renderImgThumbs();
+      _imgEdChanged = true;
+      selectEditorImage(Math.min(index, _imgEdImages.length - 1));
+      toast('Image deleted');
+    }
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+function showAddImageUI() {
+  const bar = document.getElementById('img-action-bar');
+  bar.innerHTML = `
+    <div style="width:100%;display:flex;gap:6px;align-items:center;">
+      <input type="text" id="add-image-url" placeholder="Paste image URL..." style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+      <button class="btn btn-primary btn-sm" onclick="addImageByUrl()">Add</button>
+      <button class="btn btn-outline btn-sm" onclick="selectEditorImage(_imgEdSelected)">Cancel</button>
+    </div>`;
+  document.getElementById('add-image-url').focus();
+  document.getElementById('add-image-url').addEventListener('keydown', e => {
+    if (e.key === 'Enter') addImageByUrl();
+  });
+}
+
+async function addImageByUrl() {
+  const urlInput = document.getElementById('add-image-url');
+  const url = (urlInput ? urlInput.value.trim() : '');
+  if (!url) { toast('Enter an image URL', 'error'); return; }
+
+  try {
+    const newIndex = _imgEdImages.length;
+    const resp = await fetch(`/api/products/${_imgEdProductId}/images/override`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({image_index: newIndex, url})
+    });
+    if (!resp.ok) { toast('Failed to add image', 'error'); return; }
+
+    // Re-fetch image list
+    const listResp = await fetch(`/api/products/${_imgEdProductId}/images`);
+    const listData = await listResp.json();
+    if (listResp.ok) {
+      _imgEdImages = listData.images || [];
+      document.getElementById('img-editor-title').textContent = `Product Images (${_imgEdImages.length})`;
+      renderImgThumbs();
+      _imgEdChanged = true;
+      selectEditorImage(_imgEdImages.length - 1);
+      toast('Image added');
+    }
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
 // ---- AI Image Generation ----
 
 let _genPreviewUrl = null; // Temporary R2 URL of generated image
@@ -4109,6 +4241,9 @@ function showGenerateUI() {
         <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Luxury editorial — product on a model in studio" onclick="genShortcut('Modern luxury product photography: show this product being worn or held by a model in a professional studio. Clean grey or white backdrop, soft diffused lighting, shallow depth of field. Editorial fashion style — minimal styling, neutral tones, the product is the hero. High-end campaign look, shot on medium format.')">Lifestyle</button>
         <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Transform phone photo into pro product shot" onclick="genShortcut('Transform this into a professional e-commerce product shot: clean white seamless studio background, soft even lighting with no harsh shadows, remove any reflections or artifacts from phone camera, crisp product details with natural color accuracy, subtle shadow beneath for grounding. Commercial catalog photography quality.')">Pro Shot</button>
         <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Generate a new angle of the product" onclick="genShortcut('Generate a new angle of this product: show it from a different perspective (three-quarter, side profile, slight overhead, or back view). Maintain the same product identity, colors, and details. Clean white studio background, professional product photography lighting, sharp detail throughout. The angle should reveal features not visible in the original shot.')">Angles</button>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Invisible mannequin / ghost effect for clothing" onclick="genShortcut('Remove the model or mannequin and show the garment as if worn by an invisible form. Maintain the 3D shape and structure of the clothing with natural draping and volume. Clean white background, professional studio lighting, subtle shadows for depth. The garment should appear to float with realistic form as if on an invisible body. Crisp detail on fabric texture, stitching, and construction.')">Ghost</button>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Overhead flat lay on white surface" onclick="genShortcut('Photograph this product as a flat lay from directly overhead on a clean white surface. Neatly arranged, perfectly symmetrical, styled with minimal props if appropriate. Soft even lighting with no harsh shadows, gentle natural shadow beneath the product. Crisp sharp detail throughout, e-commerce catalog quality. Birds-eye view, professional product photography.')">Flatlay</button>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Replace the model with a different one" onclick="genShortcut('Replace the model in this image with a different person while keeping everything else identical. Keep the exact same clothing, pose, styling, background, and lighting. The new model should be a professional fashion model with a natural, editorial look. Maintain the same camera angle, framing, and composition. The clothing fit and draping should look realistic on the new model. High-end fashion photography quality.')">New Model</button>
       </div>
       <div style="display:flex;gap:6px;align-items:center;">
         <input type="text" id="gen-prompt" placeholder="Describe the image or use a shortcut above..." style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
@@ -4274,7 +4409,7 @@ function enterEditMode(index) {
   document.getElementById('img-gallery-view').style.display = 'none';
   document.getElementById('img-edit-view').style.display = 'block';
   document.getElementById('img-crop-actions').style.display = 'none';
-  document.getElementById('img-crop-overlay').style.display = 'none';
+  document.getElementById('img-crop-canvas').style.display = 'none';
   document.getElementById('img-crop-toggle').classList.remove('btn-primary');
 
   const img = _imgEdImages[index];
@@ -4290,21 +4425,6 @@ function enterEditMode(index) {
     _imgEdOriginalImg.src = '/api/image-proxy?url=' + encodeURIComponent(img.effective_url);
   };
   _imgEdOriginalImg.src = img.effective_url;
-}
-
-function _imgEdRenderClean() {
-  const w = _imgEdOriginalImg.naturalWidth;
-  const h = _imgEdOriginalImg.naturalHeight;
-  const swapped = _imgEdRotation % 180 !== 0;
-  const c = document.createElement('canvas');
-  c.width = swapped ? h : w;
-  c.height = swapped ? w : h;
-  const ctx = c.getContext('2d');
-  ctx.translate(c.width / 2, c.height / 2);
-  ctx.rotate((_imgEdRotation * Math.PI) / 180);
-  ctx.scale(_imgEdFlipH ? -1 : 1, _imgEdFlipV ? -1 : 1);
-  ctx.drawImage(_imgEdOriginalImg, -w / 2, -h / 2);
-  return c;
 }
 
 function imgEdRedraw() {
@@ -4326,37 +4446,49 @@ function imgEdRedraw() {
   ctx.drawImage(_imgEdOriginalImg, -w / 2, -h / 2);
   ctx.restore();
 
-  // Draw crop rectangle if active
-  if (_imgEdCropping && _imgEdCropRect) {
-    const r = _imgEdCropRect;
-    // Dim outside crop area
-    ctx.fillStyle = 'rgba(0,0,0,0.4)';
-    ctx.fillRect(0, 0, canvas.width, r.y);
-    ctx.fillRect(0, r.y, r.x, r.h);
-    ctx.fillRect(r.x + r.w, r.y, canvas.width - r.x - r.w, r.h);
-    ctx.fillRect(0, r.y + r.h, canvas.width, canvas.height - r.y - r.h);
-    // Crop border
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 3]);
-    ctx.strokeRect(r.x, r.y, r.w, r.h);
-    ctx.setLineDash([]);
-    // Draw 8 resize handles
-    const displayRect = canvas.getBoundingClientRect();
-    const hvx = CROP_HANDLE_VISUAL * (canvas.width / displayRect.width);
-    const hvy = CROP_HANDLE_VISUAL * (canvas.height / displayRect.height);
-    const handlePositions = [
-      {x: r.x, y: r.y}, {x: r.x+r.w/2, y: r.y}, {x: r.x+r.w, y: r.y},
-      {x: r.x+r.w, y: r.y+r.h/2}, {x: r.x+r.w, y: r.y+r.h},
-      {x: r.x+r.w/2, y: r.y+r.h}, {x: r.x, y: r.y+r.h}, {x: r.x, y: r.y+r.h/2}
-    ];
-    ctx.fillStyle = '#fff';
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 1;
-    for (const pos of handlePositions) {
-      ctx.fillRect(pos.x - hvx, pos.y - hvy, hvx*2, hvy*2);
-      ctx.strokeRect(pos.x - hvx, pos.y - hvy, hvx*2, hvy*2);
-    }
+  // Crop overlay is drawn on a SEPARATE canvas — never on this one
+  imgEdRedrawCropOverlay();
+}
+
+function imgEdRedrawCropOverlay() {
+  const overlay = document.getElementById('img-crop-canvas');
+  if (!overlay) return;
+  const imgCanvas = document.getElementById('img-edit-canvas');
+  // Sync overlay internal dimensions to image canvas
+  overlay.width = imgCanvas.width;
+  overlay.height = imgCanvas.height;
+  const ctx = overlay.getContext('2d');
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+  if (!_imgEdCropping || !_imgEdCropRect) return;
+  const r = _imgEdCropRect;
+  // Dim outside crop area
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(0, 0, overlay.width, r.y);
+  ctx.fillRect(0, r.y, r.x, r.h);
+  ctx.fillRect(r.x + r.w, r.y, overlay.width - r.x - r.w, r.h);
+  ctx.fillRect(0, r.y + r.h, overlay.width, overlay.height - r.y - r.h);
+  // Crop border
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 3]);
+  ctx.strokeRect(r.x, r.y, r.w, r.h);
+  ctx.setLineDash([]);
+  // Draw 8 resize handles
+  const displayRect = imgCanvas.getBoundingClientRect();
+  const hvx = CROP_HANDLE_VISUAL * (imgCanvas.width / displayRect.width);
+  const hvy = CROP_HANDLE_VISUAL * (imgCanvas.height / displayRect.height);
+  const handlePositions = [
+    {x: r.x, y: r.y}, {x: r.x+r.w/2, y: r.y}, {x: r.x+r.w, y: r.y},
+    {x: r.x+r.w, y: r.y+r.h/2}, {x: r.x+r.w, y: r.y+r.h},
+    {x: r.x+r.w/2, y: r.y+r.h}, {x: r.x, y: r.y+r.h}, {x: r.x, y: r.y+r.h/2}
+  ];
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  for (const pos of handlePositions) {
+    ctx.fillRect(pos.x - hvx, pos.y - hvy, hvx*2, hvy*2);
+    ctx.strokeRect(pos.x - hvx, pos.y - hvy, hvx*2, hvy*2);
   }
 }
 
@@ -4378,14 +4510,14 @@ function imgEdReset() {
   _imgEdCropping = false;
   _imgEdCropRect = null;
   document.getElementById('img-crop-actions').style.display = 'none';
-  document.getElementById('img-crop-overlay').style.display = 'none';
+  document.getElementById('img-crop-canvas').style.display = 'none';
   document.getElementById('img-crop-toggle').classList.remove('btn-primary');
   imgEdRedraw();
 }
 
 function imgEdToggleCrop() {
   _imgEdCropping = !_imgEdCropping;
-  const overlay = document.getElementById('img-crop-overlay');
+  const overlay = document.getElementById('img-crop-canvas');
   const actions = document.getElementById('img-crop-actions');
   const btn = document.getElementById('img-crop-toggle');
   if (_imgEdCropping) {
@@ -4501,7 +4633,7 @@ function _cropHitTest(cx, cy) {
 }
 
 function _updateOverlayCursor(hit) {
-  const overlay = document.getElementById('img-crop-overlay');
+  const overlay = document.getElementById('img-crop-canvas');
   if (hit.type === 'handle') overlay.style.cursor = HANDLE_CURSORS[hit.handle];
   else if (hit.type === 'move') overlay.style.cursor = 'move';
   else overlay.style.cursor = 'crosshair';
@@ -4589,7 +4721,7 @@ function imgEdCropPointerDown(e) {
     const mx = (me.clientX - rect.left) * scaleX;
     const my = (me.clientY - rect.top) * scaleY;
     _cropPointerMove(mx, my, canvas);
-    imgEdRedraw();
+    imgEdRedrawCropOverlay();
   };
   const onUp = () => {
     _cropDragMode = null; _cropActiveHandle = null;
@@ -4599,7 +4731,7 @@ function imgEdCropPointerDown(e) {
     }
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
-    imgEdRedraw();
+    imgEdRedrawCropOverlay();
   };
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
@@ -4616,7 +4748,7 @@ function imgEdCropTouchStart(e) {
 
   imgEdCropPointerDown({preventDefault:()=>{}, clientX: touch.clientX, clientY: touch.clientY});
 
-  const overlay = document.getElementById('img-crop-overlay');
+  const overlay = document.getElementById('img-crop-canvas');
   overlay.ontouchmove = (te) => {
     te.preventDefault();
     if (!te.touches.length) return;
@@ -4624,7 +4756,7 @@ function imgEdCropTouchStart(e) {
     const mx = (t.clientX - rect.left) * scaleX;
     const my = (t.clientY - rect.top) * scaleY;
     _cropPointerMove(mx, my, canvas);
-    imgEdRedraw();
+    imgEdRedrawCropOverlay();
   };
   overlay.ontouchend = () => {
     _cropDragMode = null; _cropActiveHandle = null;
@@ -4633,7 +4765,7 @@ function imgEdCropTouchStart(e) {
       _imgEdCropRect = _cropOrigRect;
     }
     overlay.ontouchmove = null; overlay.ontouchend = null;
-    imgEdRedraw();
+    imgEdRedrawCropOverlay();
   };
 }
 
@@ -4642,21 +4774,23 @@ function imgEdApplyCrop() {
     toast('Select a crop area first', 'error');
     return;
   }
-  const r = _imgEdCropRect;
-  // Use off-screen canvas to get clean pixels (no crop overlay)
-  const clean = _imgEdRenderClean();
-  const cropped = clean.getContext('2d').getImageData(r.x, r.y, r.w, r.h);
-  const canvas = document.getElementById('img-edit-canvas');
-  const ctx = canvas.getContext('2d');
-  canvas.width = r.w;
-  canvas.height = r.h;
-  ctx.putImageData(cropped, 0, 0);
+  const rx = Math.round(_imgEdCropRect.x), ry = Math.round(_imgEdCropRect.y);
+  const rw = Math.round(_imgEdCropRect.w), rh = Math.round(_imgEdCropRect.h);
 
-  // Update the "original" to be the cropped canvas so further edits build on it
+  // Image canvas is ALWAYS clean (overlay is on separate canvas)
+  // Extract crop region directly
+  const canvas = document.getElementById('img-edit-canvas');
   const tempCanvas = document.createElement('canvas');
-  tempCanvas.width = r.w;
-  tempCanvas.height = r.h;
-  tempCanvas.getContext('2d').putImageData(cropped, 0, 0);
+  tempCanvas.width = rw;
+  tempCanvas.height = rh;
+  tempCanvas.getContext('2d').drawImage(canvas, rx, ry, rw, rh, 0, 0, rw, rh);
+
+  // Update visible canvas to show cropped result
+  canvas.width = rw;
+  canvas.height = rh;
+  canvas.getContext('2d').drawImage(tempCanvas, 0, 0);
+
+  // Update original image for further edits
   const newImg = new Image();
   newImg.onload = () => {
     _imgEdOriginalImg = newImg;
@@ -4666,9 +4800,10 @@ function imgEdApplyCrop() {
   };
   newImg.src = tempCanvas.toDataURL('image/png');
 
+  // Clear crop state and hide overlay canvas
   _imgEdCropping = false;
   _imgEdCropRect = null;
-  document.getElementById('img-crop-overlay').style.display = 'none';
+  document.getElementById('img-crop-canvas').style.display = 'none';
   document.getElementById('img-crop-actions').style.display = 'none';
   document.getElementById('img-crop-toggle').classList.remove('btn-primary');
 }
@@ -4676,16 +4811,22 @@ function imgEdApplyCrop() {
 function imgEdCancelCrop() {
   _imgEdCropping = false;
   _imgEdCropRect = null;
-  document.getElementById('img-crop-overlay').style.display = 'none';
+  document.getElementById('img-crop-canvas').style.display = 'none';
   document.getElementById('img-crop-actions').style.display = 'none';
   document.getElementById('img-crop-toggle').classList.remove('btn-primary');
   imgEdRedraw();
 }
 
 async function imgEdSave() {
-  // Use off-screen canvas to get clean pixels (no crop overlay)
-  const clean = _imgEdRenderClean();
-  const dataUrl = clean.toDataURL('image/jpeg', 0.92);
+  // If crop is active, apply it first so canvas is clean
+  if (_imgEdCropping && _imgEdCropRect && _imgEdCropRect.w >= 10 && _imgEdCropRect.h >= 10) {
+    imgEdApplyCrop();
+  } else if (_imgEdCropping) {
+    imgEdCancelCrop();
+  }
+  // Canvas is now clean (no overlay). Capture directly.
+  const canvas = document.getElementById('img-edit-canvas');
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
   const img = _imgEdImages[_imgEdSelected];
   if (!img) return;
 

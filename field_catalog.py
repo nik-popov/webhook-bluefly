@@ -313,16 +313,22 @@ class BlueflyFieldCatalog:
             pass
 
         # 3) Prefix match for width variants — "9" matches "9 Medium" (default width)
+        #    Skip "x NN" suffixes (waist x inseam) — "40" must NOT match "40 x 28"
         for av in allowed:
             parts = av.split(None, 1)
-            if parts and parts[0].lower() == raw.lower():
-                # Prefer "Medium" width as default
-                if len(parts) > 1 and parts[1] == "Medium":
+            if len(parts) == 2 and parts[0].lower() == raw.lower():
+                suffix = parts[1].strip().lower()
+                if suffix.startswith("x "):
+                    continue  # waist x inseam — not a width match
+                if suffix == "medium":
                     return {"field_name": field_name, "value": av}
-        # If no Medium width, take first prefix match
+        # If no Medium width, take first non-"x" prefix match
         for av in allowed:
             parts = av.split(None, 1)
-            if parts and parts[0].lower() == raw.lower():
+            if len(parts) == 2 and parts[0].lower() == raw.lower():
+                suffix = parts[1].strip().lower()
+                if suffix.startswith("x "):
+                    continue
                 return {"field_name": field_name, "value": av}
 
         # 4) SML shorthand expansion — "S" → "Regular S", "XL" → "Regular XL"

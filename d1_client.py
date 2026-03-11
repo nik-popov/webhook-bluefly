@@ -16,22 +16,25 @@ _CONFIG_FALLBACK_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 class D1Client:
     """Thin wrapper around the Cloudflare D1 REST API."""
 
+    _MAX_BATCH = 100  # max statements per HTTP call
+
     def __init__(self, account_id: str, database_id: str, api_token: str):
         self.url = (
             f"https://api.cloudflare.com/client/v4/accounts/{account_id}"
             f"/d1/database/{database_id}/query"
         )
-        self.headers = {
+        self._session = requests.Session()
+        self._session.headers.update({
             "Authorization": f"Bearer {api_token}",
             "Content-Type": "application/json",
-        }
+        })
 
     def execute(self, sql: str, params: list | None = None) -> list[dict]:
         """Execute a single SQL statement and return result rows."""
         body = {"sql": sql}
         if params:
             body["params"] = params
-        resp = requests.post(self.url, headers=self.headers, json=body, timeout=15)
+        resp = self._session.post(self.url, json=body, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         if not data.get("success"):
@@ -41,6 +44,58 @@ class D1Client:
         if results and "results" in results[0]:
             return results[0]["results"]
         return []
+
+    def execute_batch(
+        self, statements: list[tuple[str, list | None]]
+    ) -> list[list[dict]]:
+        """Execute multiple SQL statements.
+
+        D1 REST API only supports semicolon-joined batching for
+        param-free statements.  When any statement has params we
+        split into: one semicolon-joined call for param-free stmts,
+        plus individual calls for parameterized stmts.
+
+        Args:
+            statements: List of (sql, params) tuples.
+        Returns:
+            List of result-row lists, one per input statement.
+        """
+        if not statements:
+            return []
+        if len(statements) == 1:
+            return [self.execute(statements[0][0], statements[0][1])]
+
+        # Split into param-free (batchable) and parameterized (individual)
+        has_params = any(p for _, p in statements)
+        if not has_params:
+            return self._execute_batch_joined(statements)
+
+        # All have params or mixed -- run sequentially (session keeps conn alive)
+        return [self.execute(sql, params) for sql, params in statements]
+
+    def _execute_batch_joined(
+        self, statements: list[tuple[str, list | None]]
+    ) -> list[list[dict]]:
+        """Batch param-free statements via semicolon-joined SQL."""
+        # Auto-chunk at _MAX_BATCH
+        if len(statements) > self._MAX_BATCH:
+            all_results = []
+            for i in range(0, len(statements), self._MAX_BATCH):
+                chunk = statements[i : i + self._MAX_BATCH]
+                all_results.extend(self._execute_batch_joined(chunk))
+            return all_results
+
+        sql_joined = "; ".join(s.rstrip(";") for s, _ in statements)
+        body = {"sql": sql_joined}
+        resp = self._session.post(self.url, json=body, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("success"):
+            errors = data.get("errors", [])
+            raise RuntimeError(f"D1 batch query failed: {errors}")
+
+        results = data.get("result", [])
+        return [r.get("results", []) for r in results]
 
     def load_all(self) -> dict:
         """Load all config rows as a dict."""
@@ -55,14 +110,17 @@ class D1Client:
         return cfg
 
     def save_all(self, cfg: dict) -> None:
-        """Save all config keys via INSERT OR REPLACE."""
+        """Save all config keys via batch INSERT OR REPLACE."""
+        statements = []
         for key, value in cfg.items():
             serialized = json.dumps(value) if not isinstance(value, str) else value
-            self.execute(
+            statements.append((
                 "INSERT OR REPLACE INTO config (key, value, updated_at) "
                 "VALUES (?, ?, datetime('now'))",
                 [key, serialized],
-            )
+            ))
+        if statements:
+            self.execute_batch(statements)
 
 
 class CachedD1Config:

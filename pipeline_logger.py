@@ -110,12 +110,62 @@ class PipelineLogger:
 
         if _is_d1_ref(job_ref):
             try:
-                return self._update_stage_d1(job_ref, stage, data, error)
+                result = self._update_stage_d1(job_ref, stage, data, error)
             except Exception as exc:
                 logger.warning("D1 update_stage failed: %s", exc)
                 return {"status": stage}
+        else:
+            result = self._update_stage_filesystem(job_ref, stage, data, error)
 
-        return self._update_stage_filesystem(job_ref, stage, data, error)
+        # Keep products table in sync for terminal stages
+        if stage in ("pushed", "error", "size_error"):
+            self._sync_product_status(job_ref, stage, data)
+
+        return result
+
+    def _sync_product_status(self, job_ref: str, stage: str, data: dict = None) -> None:
+        """Write terminal stage info to products table (best-effort)."""
+        try:
+            from product_store import get_product_store
+            store = get_product_store()
+
+            # Determine product_id — try to read from the job record
+            pid = None
+            sku = None
+            size_errors = None
+            if data:
+                pid = data.get("product_id")
+                sku = data.get("sku")
+                size_errors = data.get("size_errors")
+
+            if not pid:
+                # Read the job to get product_id
+                if _is_d1_ref(job_ref):
+                    row_id = _parse_d1_id(job_ref)
+                    rows = self._d1.execute(
+                        "SELECT product_id, stages FROM pipeline_jobs WHERE id = ?", [row_id]
+                    )
+                    if rows:
+                        pid = rows[0].get("product_id")
+                        # Check enriched stage for real product_id
+                        stages = []
+                        try:
+                            stages = json.loads(rows[0].get("stages", "[]") or "[]")
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                        for s in stages:
+                            if s.get("stage") == "enriched":
+                                ep = (s.get("data") or {}).get("product_id")
+                                if ep:
+                                    pid = ep
+                                break
+
+            if pid:
+                store.upsert_product_status(
+                    str(pid), stage, sku=sku, size_errors=size_errors
+                )
+        except Exception as exc:
+            logger.warning("_sync_product_status failed: %s", exc)
 
     def patch_product_id(self, job_ref: str, product_id) -> None:
         """Overwrite the top-level product_id once the real Shopify ID is known."""
@@ -315,6 +365,12 @@ class PipelineLogger:
                 rows = self._d1.execute("SELECT COUNT(*) as cnt FROM pipeline_jobs")
                 count = rows[0]["cnt"] if rows else 0
                 self._d1.execute("DELETE FROM pipeline_jobs")
+                # Also clear products table
+                try:
+                    from product_store import get_product_store
+                    get_product_store().reset_all_product_statuses()
+                except Exception:
+                    pass
                 return count
             except Exception as exc:
                 logger.warning("D1 reset_all_jobs failed, falling back to filesystem: %s", exc)
@@ -337,11 +393,21 @@ class PipelineLogger:
         """
         if self._d1:
             try:
-                return self._delete_jobs_by_product_ids_d1(product_ids)
+                result = self._delete_jobs_by_product_ids_d1(product_ids)
             except Exception as exc:
                 logger.warning("D1 delete_jobs_by_product_ids failed, falling back to filesystem: %s", exc)
+                return self._delete_jobs_by_product_ids_filesystem(product_ids)
+        else:
+            result = self._delete_jobs_by_product_ids_filesystem(product_ids)
 
-        return self._delete_jobs_by_product_ids_filesystem(product_ids)
+        # Also clear products table entries
+        try:
+            from product_store import get_product_store
+            get_product_store().delete_product_statuses(product_ids)
+        except Exception:
+            pass
+
+        return result
 
     # ---- D1 implementations ----
 

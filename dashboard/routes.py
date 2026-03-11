@@ -160,15 +160,28 @@ def _get_clients():
 
 
 def _get_db():
-    """Create a fresh DB connection for dashboard operations."""
-    import app as app_module
+    """Create a BlueflyDBLookup backed by D1."""
     from sql_lookup import BlueflyDBLookup
-    return BlueflyDBLookup(
-        app_module.SQL_SERVER,
-        app_module.SQL_DATABASE,
-        app_module.SQL_USER,
-        app_module.SQL_PASSWORD,
-    )
+    from d1_client import get_d1_client
+    return BlueflyDBLookup(get_d1_client())
+
+
+def _log_activity(event_type, topic, product_id=None, status="processed", detail=""):
+    """Log a dashboard activity event to the events system."""
+    try:
+        clients = _get_clients()
+        tx = clients["tx_logger"]
+        tx.log({
+            "type": event_type,
+            "topic": topic,
+            "product_id": product_id,
+            "status": status,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event_id": f"{topic}_{int(time.time())}",
+            "detail": detail,
+        })
+    except Exception as e:
+        print(f"[Activity] Failed to log event: {e}")
 
 
 # -----------------------------------------------------------------------
@@ -200,12 +213,14 @@ def _has_valid_image_format(image_url: str) -> bool:
     return False
 
 
-def _apply_image_overrides(product: dict, product_id: int, cfg: dict) -> None:
-    """Replace image URLs with overrides from config (in-place)."""
-    overrides = cfg.get("image_overrides", {}).get(str(product_id), {})
-    if not overrides:
+def _apply_image_overrides(product: dict, product_id: int, image_overrides: dict = None) -> None:
+    """Replace image URLs with overrides (in-place). Pass pre-fetched dict to avoid extra D1 call."""
+    if image_overrides is None:
+        from product_store import get_product_store
+        image_overrides = get_product_store().get_image_overrides(str(product_id))
+    if not image_overrides:
         return
-    for idx_str, new_url in overrides.items():
+    for idx_str, new_url in image_overrides.items():
         idx = int(idx_str)
         images = product.get("images", [])
         if idx < len(images):
@@ -231,8 +246,8 @@ def api_product_images(product_id):
     if not product:
         return jsonify({"error": "Product not found"}), 404
 
-    cfg = load_config()
-    image_overrides = cfg.get("image_overrides", {}).get(str(product_id), {})
+    from product_store import get_product_store
+    image_overrides = get_product_store().get_image_overrides(str(product_id))
 
     images = []
     shopify_images = product.get("images", [])
@@ -275,11 +290,8 @@ def api_image_override(product_id):
     if image_index is None or not new_url:
         return jsonify({"error": "image_index and url required"}), 400
 
-    cfg = load_config()
-    overrides = cfg.setdefault("image_overrides", {})
-    product_overrides = overrides.setdefault(str(product_id), {})
-    product_overrides[str(image_index)] = new_url
-    save_config(cfg)
+    from product_store import get_product_store
+    get_product_store().set_image_override(str(product_id), int(image_index), new_url)
 
     return jsonify({"ok": True, "product_id": product_id,
                      "image_index": image_index, "url": new_url})
@@ -287,20 +299,108 @@ def api_image_override(product_id):
 
 @dashboard_bp.route("/api/products/<int:product_id>/images/override", methods=["DELETE"])
 def api_image_override_delete(product_id):
-    """Remove an image URL override for a product image."""
+    """Remove an image URL override for a product image.
+
+    For extra images (index >= Shopify image count), re-indexes higher overrides
+    to fill the gap so image positions stay contiguous.
+    """
     data = request.get_json(force=True)
     image_index = data.get("image_index")
 
     if image_index is None:
         return jsonify({"error": "image_index required"}), 400
 
-    cfg = load_config()
-    overrides = cfg.get("image_overrides", {})
-    product_overrides = overrides.get(str(product_id), {})
-    product_overrides.pop(str(image_index), None)
-    if not product_overrides:
-        overrides.pop(str(product_id), None)
-    save_config(cfg)
+    idx = int(image_index)
+    pid = str(product_id)
+    from product_store import get_product_store
+    store = get_product_store()
+
+    # Get Shopify image count to know if this is an extra image
+    clients = _get_clients()
+    shopify = clients["shopify"]
+    shopify_count = 0
+    if shopify:
+        try:
+            product = shopify.get_product_full(product_id)
+            shopify_count = len(product.get("images", [])) if product else 0
+        except Exception:
+            pass
+
+    store.delete_image_override(pid, idx)
+
+    # Re-index: shift higher overrides down by 1 to fill the gap
+    if idx >= shopify_count:
+        overrides = store.get_image_overrides(pid)
+        for old_idx_str in sorted(overrides.keys(), key=int):
+            old_idx = int(old_idx_str)
+            if old_idx > idx:
+                store.set_image_override(pid, old_idx - 1, overrides[old_idx_str])
+                store.delete_image_override(pid, old_idx)
+
+    return jsonify({"ok": True})
+
+
+@dashboard_bp.route("/api/products/<int:product_id>/images/reorder", methods=["POST"])
+def api_image_reorder(product_id):
+    """Reorder images by providing new index order.
+
+    Body: { "order": [2, 0, 1, 3] }  — array of old indices in new order.
+    Since Shopify images can't be reordered server-side, this saves all
+    positions as overrides with the effective URLs.
+    """
+    data = request.get_json(force=True)
+    new_order = data.get("order", [])
+
+    if not new_order or not isinstance(new_order, list):
+        return jsonify({"error": "order array required"}), 400
+
+    pid = str(product_id)
+    clients = _get_clients()
+    shopify = clients["shopify"]
+
+    if not shopify:
+        return jsonify({"error": "Shopify client not configured"}), 500
+
+    product = shopify.get_product_full(product_id)
+    if not product:
+        return jsonify({"error": "Product not found"}), 404
+
+    from product_store import get_product_store
+    store = get_product_store()
+    overrides = store.get_image_overrides(pid)
+
+    # Build current effective URL list
+    shopify_images = product.get("images", [])
+    effective = []
+    for i in range(max(len(shopify_images), max((int(k) for k in overrides), default=-1) + 1)):
+        override_url = overrides.get(str(i))
+        if override_url:
+            effective.append(override_url)
+        elif i < len(shopify_images):
+            img = shopify_images[i]
+            effective.append(img.get("url", "") if isinstance(img, dict) else str(img))
+        else:
+            effective.append("")
+
+    # Validate order array
+    if len(new_order) != len(effective):
+        return jsonify({"error": f"order length ({len(new_order)}) != image count ({len(effective)})"}), 400
+
+    # Build reordered URL list
+    reordered = [effective[i] for i in new_order]
+
+    # Save all as overrides (clear existing first)
+    for old_idx_str in list(overrides.keys()):
+        store.delete_image_override(pid, int(old_idx_str))
+
+    for new_idx, url in enumerate(reordered):
+        # Only save override if different from Shopify original at that position
+        shopify_url = ""
+        if new_idx < len(shopify_images):
+            img = shopify_images[new_idx]
+            shopify_url = img.get("url", "") if isinstance(img, dict) else str(img)
+        if url != shopify_url or new_idx >= len(shopify_images):
+            store.set_image_override(pid, new_idx, url)
 
     return jsonify({"ok": True})
 
@@ -317,8 +417,10 @@ def api_image_proxy():
         req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
         resp = urlopen(req, timeout=15)
         ct = resp.headers.get("Content-Type", "image/jpeg")
+        # Short cache for R2 (overrides may change), longer for Shopify CDN
+        ttl = 60 if ".r2.dev" in url else 3600
         return Response(resp.read(), content_type=ct,
-                        headers={"Cache-Control": "public, max-age=3600"})
+                        headers={"Cache-Control": f"public, max-age={ttl}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 
@@ -364,14 +466,13 @@ def api_image_convert(product_id):
         import r2_client
         resource_url = r2_client.upload(file_bytes, key, mime)
 
-        # Save as override
-        cfg = load_config()
-        overrides = cfg.setdefault("image_overrides", {})
-        product_overrides = overrides.setdefault(str(product_id), {})
-        product_overrides[str(image_index)] = resource_url
-        save_config(cfg)
+        # Save override to D1 (ProductStore) with cache-busting timestamp
+        import time
+        cache_bust_url = f"{resource_url}?t={int(time.time())}"
+        from product_store import get_product_store
+        get_product_store().set_image_override(str(product_id), int(image_index), cache_bust_url)
 
-        return jsonify({"ok": True, "url": resource_url,
+        return jsonify({"ok": True, "url": cache_bust_url,
                          "product_id": product_id, "image_index": image_index})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -406,14 +507,13 @@ def api_image_upload(product_id):
         import r2_client
         resource_url = r2_client.upload(file_bytes, key, mime_type)
 
-        # Save as override
-        cfg = load_config()
-        overrides = cfg.setdefault("image_overrides", {})
-        product_overrides = overrides.setdefault(str(product_id), {})
-        product_overrides[str(image_index)] = resource_url
-        save_config(cfg)
+        # Save override to D1 (ProductStore) with cache-busting timestamp
+        import time
+        cache_bust_url = f"{resource_url}?t={int(time.time())}"
+        from product_store import get_product_store
+        get_product_store().set_image_override(str(product_id), int(image_index), cache_bust_url)
 
-        return jsonify({"ok": True, "url": resource_url,
+        return jsonify({"ok": True, "url": cache_bust_url,
                          "product_id": product_id, "image_index": image_index})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -512,6 +612,7 @@ def api_generate_image(product_id):
                 continue
 
         if result is None:
+            _log_activity("gemini", "gemini/generate", product_id=product_id, status="error", detail=last_error or "All models failed")
             yield json.dumps({"error": last_error or "All Gemini models failed"})
             return
 
@@ -530,6 +631,7 @@ def api_generate_image(product_id):
 
         if not image_data:
             print(f"[GenImage] No image in response: {json.dumps(result)[:200]}")
+            _log_activity("gemini", "gemini/generate", product_id=product_id, status="error", detail="No image in Gemini response")
             yield json.dumps({"error": "Gemini returned no image. Try a different prompt."})
             return
 
@@ -541,9 +643,11 @@ def api_generate_image(product_id):
             key = f"images/{product_id}/gen_{timestamp}.{ext}"
             resource_url = r2_client.upload(file_bytes, key, mime_type)
             print(f"[GenImage] Uploaded to R2: {resource_url}")
+            _log_activity("gemini", "gemini/generate", product_id=product_id, status="processed", detail=f"Model: {gemini_model}")
             yield json.dumps({"ok": True, "url": resource_url})
         except Exception as e:
             print(f"[GenImage] R2 upload failed: {e}")
+            _log_activity("gemini", "gemini/generate", product_id=product_id, status="error", detail=f"R2 upload failed: {e}")
             yield json.dumps({"error": f"R2 upload failed: {e}"})
 
     return Response(stream_with_context(generate()), mimetype="application/json")
@@ -553,13 +657,25 @@ def api_generate_image(product_id):
 # Products API
 # -----------------------------------------------------------------------
 
-def _enrich_products(products, synced_products, cfg):
+def _enrich_products(products, synced_products, cfg, overrides=None):
     """Add sync status, eligibility flags, and adjusted price to each product."""
+    if overrides is None:
+        from product_store import get_product_store
+        overrides = get_product_store().load_all_overrides_batch()
+
     adj = cfg.get("price_adjustment_pct", 0)
     elig = cfg.get("eligibility", {})
     require_quantity = elig.get("require_quantity", True)
     require_images = elig.get("require_images", True)
     require_bpid = elig.get("require_brand_product_id", True)
+
+    cat_overrides = overrides.get("category", {})
+    sf_overrides = overrides.get("size_field", {})
+    title_overrides = overrides.get("title", {})
+    vendor_overrides = overrides.get("vendor", {})
+    bpid_overrides = overrides.get("brand_product_id", {})
+    price_overrides = overrides.get("price", {})
+    all_image_overrides = overrides.get("image", {})
 
     for p in products:
         pid = p["id"]
@@ -583,7 +699,7 @@ def _enrich_products(products, synced_products, cfg):
         p["valid_image_format"] = _has_valid_image_format(p.get("image_url", ""))
 
         # Check image overrides — if override fixes the format, reflect that
-        img_overrides = cfg.get("image_overrides", {}).get(str(pid), {})
+        img_overrides = all_image_overrides.get(str(pid), {})
         if img_overrides:
             override_0 = img_overrides.get("0")
             if override_0:
@@ -594,8 +710,7 @@ def _enrich_products(products, synced_products, cfg):
         else:
             p["has_image_overrides"] = False
 
-        # Apply per-product category override from config
-        cat_overrides = cfg.get("category_overrides", {})
+        # Apply per-product category override
         override_cat = cat_overrides.get(str(pid))
         if override_cat:
             p["bluefly_category"] = override_cat
@@ -607,7 +722,6 @@ def _enrich_products(products, synced_products, cfg):
         cat = p.get("bluefly_category", "")
         sf = catalog.get_size_field_for_category(cat) if cat else None
         # Apply per-product size field override
-        sf_overrides = cfg.get("size_field_overrides", {})
         sf_override = sf_overrides.get(str(pid))
         if sf_override:
             sf = catalog.get_size_field_by_name(sf_override)
@@ -616,19 +730,19 @@ def _enrich_products(products, synced_products, cfg):
         p["size_field_display"] = sf["display_name"] if sf else None
 
         # Apply title override
-        t_override = cfg.get("title_overrides", {}).get(str(pid))
+        t_override = title_overrides.get(str(pid))
         if t_override:
             p["title"] = t_override
             p["title_overridden"] = True
 
         # Apply vendor override
-        v_override = cfg.get("vendor_overrides", {}).get(str(pid))
+        v_override = vendor_overrides.get(str(pid))
         if v_override:
             p["vendor"] = v_override
             p["vendor_overridden"] = True
 
         # Apply brand_product_id override
-        bpid_override_raw = cfg.get("brand_product_id_overrides", {}).get(str(pid))
+        bpid_override_raw = bpid_overrides.get(str(pid))
         if bpid_override_raw:
             resolved = _resolve_bpid_template(bpid_override_raw, p)
             if resolved:
@@ -637,7 +751,7 @@ def _enrich_products(products, synced_products, cfg):
             p["brand_product_id_template"] = bpid_override_raw
 
         # Apply price override
-        pr_override = cfg.get("price_overrides", {}).get(str(pid))
+        pr_override = price_overrides.get(str(pid))
         if pr_override:
             p["price_overridden"] = True
             p["price_override"] = pr_override
@@ -688,8 +802,11 @@ def _fetch_and_enrich():
         return None, None, None, str(e)
 
     cfg = load_config()
-    synced_products = clients["pipeline"].get_synced_product_ids()
-    _enrich_products(all_products, synced_products, cfg)
+    from product_store import get_product_store
+    store = get_product_store()
+    synced_products = store.get_all_product_statuses()
+    overrides = store.load_all_overrides_batch()
+    _enrich_products(all_products, synced_products, cfg, overrides)
     return all_products, cfg, synced_products, None
 
 
@@ -713,8 +830,8 @@ def api_products():
 @dashboard_bp.route("/api/stats")
 def api_stats():
     """Lightweight dashboard stats from pipeline logs only (no Shopify API calls)."""
-    clients = _get_clients()
-    synced_products = clients["pipeline"].get_synced_product_ids()
+    from product_store import get_product_store
+    synced_products = get_product_store().get_all_product_statuses()
 
     synced_count = sum(1 for info in synced_products.values()
                        if info.get("status") == "pushed")
@@ -732,7 +849,8 @@ def api_products_published():
         return jsonify({"error": "Shopify client not configured"}), 500
 
     cfg = load_config()
-    synced_products = clients["pipeline"].get_synced_product_ids()
+    from product_store import get_product_store
+    synced_products = get_product_store().get_all_product_statuses()
     pushed_ids = [pid for pid, info in synced_products.items()
                   if info.get("status") in ("pushed", "size_error")]
 
@@ -773,7 +891,8 @@ def _stream_products(filter_status=None):
         return jsonify({"error": "Shopify client not configured"}), 500
 
     cfg = load_config()
-    synced_products = clients["pipeline"].get_synced_product_ids()
+    from product_store import get_product_store
+    synced_products = get_product_store().get_all_product_statuses()
 
     import app as _app
 
@@ -839,30 +958,31 @@ def api_push_product():
         category_id = get_metafield(metafields, "custom", "bluefly_category")
 
         cfg = load_config()
+        from product_store import get_product_store
+        _store = get_product_store()
+        pid_str = str(product_id)
 
-        # Apply per-product category override
-        override_cat = cfg.get("category_overrides", {}).get(str(product_id))
+        # Fetch all overrides for this product in 1 batch call (was 7)
+        _ovr = _store.get_all_overrides_for_product(pid_str)
+
+        override_cat = _ovr["category"]
         if override_cat:
             category_id = override_cat
-            # Patch metafields so build_bluefly_payload also uses the override
             _patch_metafield(metafields, "custom", "bluefly_category", override_cat)
 
-        # Apply per-product size field override
-        sf_override = cfg.get("size_field_overrides", {}).get(str(product_id))
+        sf_override = _ovr["size_field"]
         if sf_override:
             _patch_metafield(metafields, "custom", "size_field_override", sf_override)
 
-        # Apply per-product title/vendor/price overrides
-        title_override = cfg.get("title_overrides", {}).get(str(product_id))
+        title_override = _ovr["title"]
         if title_override:
             enriched["title"] = title_override
 
-        vendor_override = cfg.get("vendor_overrides", {}).get(str(product_id))
+        vendor_override = _ovr["vendor"]
         if vendor_override:
             enriched["vendor"] = vendor_override
 
-        # Apply brand_product_id override
-        bpid_override_raw = cfg.get("brand_product_id_overrides", {}).get(str(product_id))
+        bpid_override_raw = _ovr["brand_product_id"]
         if bpid_override_raw:
             _variants = enriched.get("variants", [])
             bpid_product = {
@@ -883,7 +1003,7 @@ def api_push_product():
                 _patch_metafield(metafields, "custom", "brand_product_id", resolved)
 
         # Apply image URL overrides (format conversions, edited images)
-        _apply_image_overrides(enriched, int(product_id), cfg)
+        _apply_image_overrides(enriched, int(product_id), image_overrides=_ovr["image"])
 
         if not category_id:
             return jsonify({"error": "No bluefly_category metafield"}), 400
@@ -913,13 +1033,8 @@ def api_push_product():
               f"{len(variants)} variants, titles={variant_titles}")
         try:
             db = _get_db()
-            with db:
-                for variant in variants:
-                    vt = variant.get("title", "")
-                    if vt:
-                        sql_field_map[vt] = db.lookup_category_fields(category_id, vt)
-                    else:
-                        print(f"[Dashboard] SQL skipped variant with empty title")
+            vt_list = [v.get("title", "") for v in variants if v.get("title", "")]
+            sql_field_map = db.lookup_category_fields_batch(category_id, vt_list)
         except Exception as e:
             print(f"[Dashboard] SQL lookup skipped: {e}")
         total_fields = sum(len(v) for v in sql_field_map.values())
@@ -931,14 +1046,19 @@ def api_push_product():
         field_defaults = cfg.get("field_defaults", {})
 
         # Apply per-product price override
-        price_ov = cfg.get("price_overrides", {}).get(str(product_id))
-        if price_ov:
-            if price_ov.get("type") == "fixed":
-                for v in enriched.get("variants", []):
-                    v["price"] = str(price_ov["value"])
-                adj = 0
-            elif price_ov.get("type") == "pct":
-                adj = float(price_ov["value"])
+        price_ov_raw = _ovr["price"]
+        if price_ov_raw:
+            try:
+                price_ov = json.loads(price_ov_raw) if isinstance(price_ov_raw, str) else price_ov_raw
+            except (json.JSONDecodeError, TypeError):
+                price_ov = None
+            if price_ov:
+                if price_ov.get("type") == "fixed":
+                    for v in enriched.get("variants", []):
+                        v["price"] = str(price_ov["value"])
+                    adj = 0
+                elif price_ov.get("type") == "pct":
+                    adj = float(price_ov["value"])
 
         bluefly_payload = build_bluefly_payload(
             enriched, metafields, sql_field_map,
@@ -963,6 +1083,10 @@ def api_push_product():
                 "size_errors": size_errors,
                 "source": "dashboard",
             })
+            from product_store import get_product_store
+            get_product_store().upsert_product_status(
+                str(product_id), "size_error", size_errors=size_errors,
+            )
             return jsonify({
                 "error": "Size mapping errors — fix size field or add conversion before pushing",
                 "size_errors": size_errors,
@@ -970,8 +1094,9 @@ def api_push_product():
             }), 422
 
         # Push — use PUT if already published (full overwrite), POST for first push
-        synced = pipeline.get_synced_product_ids()
-        already_published = synced.get(int(product_id), {}).get("status") == "pushed"
+        from product_store import get_product_store
+        _ps = get_product_store().get_product_status(str(product_id))
+        already_published = _ps and _ps.get("sync_status") == "pushed"
         if already_published:
             result = bluefly.update_products_full([bluefly_payload])
             endpoint_label = "products-put"
@@ -994,6 +1119,11 @@ def api_push_product():
                 "source": "dashboard",
             }
             pipeline.update_stage(job_path, "pushed", stage_data)
+            get_product_store().upsert_product_status(
+                str(product_id), "pushed",
+                sku=bluefly_payload.get("SellerSKU", ""),
+            )
+            _log_activity("push", "push/product", product_id=product_id, status="processed", detail=f"SKU: {bluefly_payload.get('SellerSKU', '')}")
             return jsonify({
                 "success": True,
                 "status_code": result["status_code"],
@@ -1002,6 +1132,8 @@ def api_push_product():
             })
         else:
             pipeline.update_stage(job_path, "error", error=result["error"])
+            get_product_store().upsert_product_status(str(product_id), "error")
+            _log_activity("push", "push/product", product_id=product_id, status="error", detail=result["error"][:200])
             return jsonify({"error": result["error"]}), 502
 
     except Exception as e:
@@ -1038,23 +1170,26 @@ def api_push_bulk():
             eligible = [p for p in eligible if (p.get("total_quantity", 0) or 0) > 0]
         if elig.get("require_images", True):
             eligible = [p for p in eligible if p.get("image_url")]
-        bpid_overrides = cfg.get("brand_product_id_overrides", {})
+        from product_store import get_product_store
+        _pstore = get_product_store()
+        _all_overrides = _pstore.load_all_overrides_batch()
+        bpid_overrides = _all_overrides.get("brand_product_id", {})
         if elig.get("require_brand_product_id", True):
             eligible = [p for p in eligible if p.get("brand_product_id") or bpid_overrides.get(str(p["id"]))]
 
         # Check which are already synced
-        synced = pipeline.get_synced_product_ids()
+        synced = _pstore.get_all_product_statuses()
         to_push = [p for p in eligible if p["id"] not in synced or synced[p["id"]]["status"] != "pushed"]
 
         yield json.dumps({"type": "start", "total": len(to_push)}) + "\n"
 
         adj = cfg.get("price_adjustment_pct", 0)
         field_defaults = cfg.get("field_defaults", {})
-        cat_overrides = cfg.get("category_overrides", {})
-        sf_overrides = cfg.get("size_field_overrides", {})
-        title_overrides = cfg.get("title_overrides", {})
-        vendor_overrides = cfg.get("vendor_overrides", {})
-        price_overrides = cfg.get("price_overrides", {})
+        cat_overrides = _all_overrides.get("category", {})
+        sf_overrides = _all_overrides.get("size_field", {})
+        title_overrides = _all_overrides.get("title", {})
+        vendor_overrides = _all_overrides.get("vendor", {})
+        price_overrides = _all_overrides.get("price", {})
         success_count = 0
         error_count = 0
 
@@ -1108,7 +1243,7 @@ def api_push_bulk():
                         _patch_metafield(metafields, "custom", "brand_product_id", resolved)
 
                 # Apply image URL overrides
-                _apply_image_overrides(enriched, pid, cfg)
+                _apply_image_overrides(enriched, pid)
 
                 if not category_id:
                     yield json.dumps({"type": "skip", "product_id": pid, "reason": "no category"}) + "\n"
@@ -1125,24 +1260,26 @@ def api_push_bulk():
                 sql_field_map = {}
                 try:
                     db = _get_db()
-                    with db:
-                        for variant in enriched.get("variants", []):
-                            vt = variant.get("title", "")
-                            if vt:
-                                sql_field_map[vt] = db.lookup_category_fields(category_id, vt)
+                    vt_list = [v.get("title", "") for v in enriched.get("variants", []) if v.get("title", "")]
+                    sql_field_map = db.lookup_category_fields_batch(category_id, vt_list)
                 except Exception:
                     pass
 
                 # Apply per-product price override
                 prod_adj = adj
-                pr_ov = price_overrides.get(str(pid))
-                if pr_ov:
-                    if pr_ov.get("type") == "fixed":
-                        for v in enriched.get("variants", []):
-                            v["price"] = str(pr_ov["value"])
-                        prod_adj = 0
-                    elif pr_ov.get("type") == "pct":
-                        prod_adj = float(pr_ov["value"])
+                pr_ov_raw = price_overrides.get(str(pid))
+                if pr_ov_raw:
+                    try:
+                        pr_ov = json.loads(pr_ov_raw) if isinstance(pr_ov_raw, str) else pr_ov_raw
+                    except (json.JSONDecodeError, TypeError):
+                        pr_ov = None
+                    if pr_ov:
+                        if pr_ov.get("type") == "fixed":
+                            for v in enriched.get("variants", []):
+                                v["price"] = str(pr_ov["value"])
+                            prod_adj = 0
+                        elif pr_ov.get("type") == "pct":
+                            prod_adj = float(pr_ov["value"])
 
                 payload = build_bluefly_payload(
                     enriched, metafields, sql_field_map,
@@ -1214,6 +1351,7 @@ def api_push_bulk():
                 error_count += 1
                 yield json.dumps({"type": "error", "product_id": pid, "error": str(e)}) + "\n"
 
+        _log_activity("push", "push/bulk", status="processed", detail=f"Pushed {success_count}/{len(to_push)}, errors: {error_count}")
         yield json.dumps({
             "type": "complete",
             "success": success_count,
@@ -1259,7 +1397,8 @@ def api_retry_errors():
     cfg = load_config()
     adj = cfg.get("price_adjustment_pct", 0)
     field_defaults = cfg.get("field_defaults", {})
-    synced = pipeline.get_synced_product_ids()
+    from product_store import get_product_store
+    synced = get_product_store().get_all_product_statuses()
 
     resolved = 0
     still_failing = 0
@@ -1276,21 +1415,24 @@ def api_retry_errors():
             if not category_id:
                 continue
 
-            # Apply overrides
-            override_cat = cfg.get("category_overrides", {}).get(str(pid))
+            # Apply overrides from product_store (1 batch call)
+            from product_store import get_product_store
+            pid_str = str(pid)
+            _ovr = get_product_store().get_all_overrides_for_product(pid_str)
+            override_cat = _ovr["category"]
             if override_cat:
                 category_id = override_cat
                 _patch_metafield(metafields, "custom", "bluefly_category", override_cat)
-            sf_override = cfg.get("size_field_overrides", {}).get(str(pid))
+            sf_override = _ovr["size_field"]
             if sf_override:
                 _patch_metafield(metafields, "custom", "size_field_override", sf_override)
-            t_ov = cfg.get("title_overrides", {}).get(str(pid))
+            t_ov = _ovr["title"]
             if t_ov:
                 enriched["title"] = t_ov
-            v_ov = cfg.get("vendor_overrides", {}).get(str(pid))
+            v_ov = _ovr["vendor"]
             if v_ov:
                 enriched["vendor"] = v_ov
-            bpid_ov_raw = cfg.get("brand_product_id_overrides", {}).get(str(pid))
+            bpid_ov_raw = _ovr["brand_product_id"]
             if bpid_ov_raw:
                 _variants = enriched.get("variants", [])
                 bpid_product = {
@@ -1308,27 +1450,29 @@ def api_retry_errors():
                 resolved_bpid = _resolve_bpid_template(bpid_ov_raw, bpid_product)
                 if resolved_bpid:
                     _patch_metafield(metafields, "custom", "brand_product_id", resolved_bpid)
-            _apply_image_overrides(enriched, int(pid), cfg)
+            _apply_image_overrides(enriched, int(pid), image_overrides=_ovr["image"])
 
             sql_field_map = {}
             try:
                 db = _get_db()
-                with db:
-                    for v in enriched.get("variants", []):
-                        vt = v.get("title", "")
-                        if vt:
-                            sql_field_map[vt] = db.lookup_category_fields(category_id, vt)
+                vt_list = [v.get("title", "") for v in enriched.get("variants", []) if v.get("title", "")]
+                sql_field_map = db.lookup_category_fields_batch(category_id, vt_list)
             except Exception:
                 pass
 
-            price_ov = cfg.get("price_overrides", {}).get(str(pid))
-            if price_ov:
-                if price_ov.get("type") == "fixed":
-                    for v in enriched.get("variants", []):
-                        v["price"] = str(price_ov["value"])
-                    adj = 0
-                elif price_ov.get("type") == "pct":
-                    adj = float(price_ov["value"])
+            price_ov_raw = _ovr["price"]
+            if price_ov_raw:
+                try:
+                    price_ov = json.loads(price_ov_raw) if isinstance(price_ov_raw, str) else price_ov_raw
+                except (json.JSONDecodeError, TypeError):
+                    price_ov = None
+                if price_ov:
+                    if price_ov.get("type") == "fixed":
+                        for v in enriched.get("variants", []):
+                            v["price"] = str(price_ov["value"])
+                        adj = 0
+                    elif price_ov.get("type") == "pct":
+                        adj = float(price_ov["value"])
 
             payload = build_bluefly_payload(
                 enriched, metafields, sql_field_map,
@@ -1399,11 +1543,15 @@ def api_reset_sync():
 
     clients = _get_clients()
     pipeline = clients["pipeline"]
+    from product_store import get_product_store
+    store = get_product_store()
 
     if reset_all:
         deleted = pipeline.reset_all_jobs()
+        store.reset_all_product_statuses()
     else:
         deleted, _ = pipeline.delete_jobs_by_product_ids(product_ids)
+        store.delete_product_statuses(product_ids)
 
     return jsonify({"reset": deleted})
 
@@ -1429,6 +1577,8 @@ def api_delete_selected():
         clients = _get_clients()
         pipeline = clients["pipeline"]
         reset_count, pushed_skus = pipeline.delete_jobs_by_product_ids(product_ids)
+        from product_store import get_product_store
+        get_product_store().delete_product_statuses(product_ids)
 
         yield json.dumps({"type": "reset", "count": reset_count}) + "\n"
 
@@ -1500,6 +1650,7 @@ def api_delete_selected():
                 yield json.dumps({"type": "error", "error": f"Delete batch failed: {str(e)}"}) + "\n"
             time.sleep(0.5)
 
+        _log_activity("delete", "delete/products", status="processed", detail=f"Reset {reset_count}, deleted {success_count}, errors {error_count}")
         yield json.dumps({"type": "complete", "reset": reset_count, "deleted": success_count, "errors": error_count}) + "\n"
 
     return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
@@ -1654,8 +1805,9 @@ def api_catalog_claim():
     try:
         product_id = int(product_id)
         # Check if already claimed
-        synced = pipeline.get_synced_product_ids()
-        if synced.get(product_id, {}).get("status") == "pushed":
+        from product_store import get_product_store
+        _ps = get_product_store().get_product_status(str(product_id))
+        if _ps and _ps.get("sync_status") == "pushed":
             return jsonify({"success": True, "product_id": product_id, "already": True})
 
         from datetime import datetime, timezone
@@ -1697,24 +1849,26 @@ def api_sync_qty_price():
         adj = cfg.get("price_adjustment_pct", 0)
         field_defaults = cfg.get("field_defaults", {})
 
-        # Apply per-product category/size overrides (same as push route)
-        override_cat = cfg.get("category_overrides", {}).get(str(product_id))
+        # Apply per-product overrides (1 batch call)
+        from product_store import get_product_store
+        pid_str = str(product_id)
+        _ovr = get_product_store().get_all_overrides_for_product(pid_str)
+
+        override_cat = _ovr["category"]
         if override_cat:
             _patch_metafield(metafields, "custom", "bluefly_category", override_cat)
-        sf_override = cfg.get("size_field_overrides", {}).get(str(product_id))
+        sf_override = _ovr["size_field"]
         if sf_override:
             _patch_metafield(metafields, "custom", "size_field_override", sf_override)
 
-        # Apply title/vendor/price overrides
-        title_override = cfg.get("title_overrides", {}).get(str(product_id))
+        title_override = _ovr["title"]
         if title_override:
             enriched["title"] = title_override
-        vendor_override = cfg.get("vendor_overrides", {}).get(str(product_id))
+        vendor_override = _ovr["vendor"]
         if vendor_override:
             enriched["vendor"] = vendor_override
 
-        # Apply brand_product_id override
-        bpid_override_raw = cfg.get("brand_product_id_overrides", {}).get(str(product_id))
+        bpid_override_raw = _ovr["brand_product_id"]
         if bpid_override_raw:
             _variants = enriched.get("variants", [])
             bpid_product = {
@@ -1734,17 +1888,22 @@ def api_sync_qty_price():
             if resolved:
                 _patch_metafield(metafields, "custom", "brand_product_id", resolved)
 
-        price_ov = cfg.get("price_overrides", {}).get(str(product_id))
-        if price_ov:
-            if price_ov.get("type") == "fixed":
-                for v in enriched.get("variants", []):
-                    v["price"] = str(price_ov["value"])
-                adj = 0
-            elif price_ov.get("type") == "pct":
-                adj = float(price_ov["value"])
+        price_ov_raw = _ovr["price"]
+        if price_ov_raw:
+            try:
+                price_ov = json.loads(price_ov_raw) if isinstance(price_ov_raw, str) else price_ov_raw
+            except (json.JSONDecodeError, TypeError):
+                price_ov = None
+            if price_ov:
+                if price_ov.get("type") == "fixed":
+                    for v in enriched.get("variants", []):
+                        v["price"] = str(price_ov["value"])
+                    adj = 0
+                elif price_ov.get("type") == "pct":
+                    adj = float(price_ov["value"])
 
         # Apply image URL overrides
-        _apply_image_overrides(enriched, int(product_id), cfg)
+        _apply_image_overrides(enriched, int(product_id), image_overrides=_ovr["image"])
 
         # Full re-push (PUT) with merged quantities — most reliable way
         # to ensure Bluefly gets correct inventory + price.
@@ -1786,6 +1945,7 @@ def api_sync_qty_price():
                 "response_status": result["status_code"],
                 "source": "dashboard-sync",
             })
+            _log_activity("push", "push/sync-qty-price", product_id=product_id, status="processed", detail=f"SKU: {bluefly_payload.get('SellerSKU', '')}")
             return jsonify({
                 "success": True,
                 "status_code": result["status_code"],
@@ -1794,6 +1954,7 @@ def api_sync_qty_price():
             })
         else:
             pipeline.update_stage(job_path, "error", error=result["error"])
+            _log_activity("push", "push/sync-qty-price", product_id=product_id, status="error", detail=result["error"][:200])
             return jsonify({"error": result["error"]}), 502
 
     except Exception as e:
@@ -1955,20 +2116,19 @@ def api_brand_conversions_put():
 
 @dashboard_bp.route("/api/category-overrides")
 def api_category_overrides_get():
-    """Return per-product category overrides from config."""
-    cfg = load_config()
-    return jsonify(cfg.get("category_overrides", {}))
+    """Return per-product category overrides."""
+    from product_store import get_product_store
+    return jsonify(get_product_store().get_all_overrides("category"))
 
 
 @dashboard_bp.route("/api/category-overrides", methods=["PUT"])
 def api_category_overrides_put():
-    """Save per-product category overrides to config."""
+    """Save per-product category overrides."""
     data = request.get_json(force=True)
     if not isinstance(data, dict):
         return jsonify({"error": "Expected a JSON object"}), 400
-    cfg = load_config()
-    cfg["category_overrides"] = data
-    save_config(cfg)
+    from product_store import get_product_store
+    get_product_store().set_all_overrides("category", data)
     return jsonify({"ok": True})
 
 
@@ -2033,20 +2193,19 @@ def api_category_list():
 
 @dashboard_bp.route("/api/size-field-overrides")
 def api_size_field_overrides_get():
-    """Return per-product size field overrides from config."""
-    cfg = load_config()
-    return jsonify(cfg.get("size_field_overrides", {}))
+    """Return per-product size field overrides."""
+    from product_store import get_product_store
+    return jsonify(get_product_store().get_all_overrides("size_field"))
 
 
 @dashboard_bp.route("/api/size-field-overrides", methods=["PUT"])
 def api_size_field_overrides_put():
-    """Save per-product size field overrides to config."""
+    """Save per-product size field overrides."""
     data = request.get_json(force=True)
     if not isinstance(data, dict):
         return jsonify({"error": "Expected a JSON object"}), 400
-    cfg = load_config()
-    cfg["size_field_overrides"] = data
-    save_config(cfg)
+    from product_store import get_product_store
+    get_product_store().set_all_overrides("size_field", data)
     return jsonify({"ok": True})
 
 
@@ -2063,8 +2222,8 @@ def api_size_field_list():
 
 @dashboard_bp.route("/api/title-overrides")
 def api_title_overrides_get():
-    cfg = load_config()
-    return jsonify(cfg.get("title_overrides", {}))
+    from product_store import get_product_store
+    return jsonify(get_product_store().get_all_overrides("title"))
 
 
 @dashboard_bp.route("/api/title-overrides", methods=["PUT"])
@@ -2072,9 +2231,8 @@ def api_title_overrides_put():
     data = request.get_json(force=True)
     if not isinstance(data, dict):
         return jsonify({"error": "Expected a JSON object"}), 400
-    cfg = load_config()
-    cfg["title_overrides"] = data
-    save_config(cfg)
+    from product_store import get_product_store
+    get_product_store().set_all_overrides("title", data)
     return jsonify({"ok": True})
 
 
@@ -2084,8 +2242,8 @@ def api_title_overrides_put():
 
 @dashboard_bp.route("/api/vendor-overrides")
 def api_vendor_overrides_get():
-    cfg = load_config()
-    return jsonify(cfg.get("vendor_overrides", {}))
+    from product_store import get_product_store
+    return jsonify(get_product_store().get_all_overrides("vendor"))
 
 
 @dashboard_bp.route("/api/vendor-overrides", methods=["PUT"])
@@ -2093,9 +2251,8 @@ def api_vendor_overrides_put():
     data = request.get_json(force=True)
     if not isinstance(data, dict):
         return jsonify({"error": "Expected a JSON object"}), 400
-    cfg = load_config()
-    cfg["vendor_overrides"] = data
-    save_config(cfg)
+    from product_store import get_product_store
+    get_product_store().set_all_overrides("vendor", data)
     return jsonify({"ok": True})
 
 
@@ -2105,8 +2262,8 @@ def api_vendor_overrides_put():
 
 @dashboard_bp.route("/api/brand-product-id-overrides")
 def api_brand_product_id_overrides_get():
-    cfg = load_config()
-    return jsonify(cfg.get("brand_product_id_overrides", {}))
+    from product_store import get_product_store
+    return jsonify(get_product_store().get_all_overrides("brand_product_id"))
 
 
 @dashboard_bp.route("/api/brand-product-id-overrides", methods=["PUT"])
@@ -2114,9 +2271,8 @@ def api_brand_product_id_overrides_put():
     data = request.get_json(force=True)
     if not isinstance(data, dict):
         return jsonify({"error": "Expected a JSON object"}), 400
-    cfg = load_config()
-    cfg["brand_product_id_overrides"] = data
-    save_config(cfg)
+    from product_store import get_product_store
+    get_product_store().set_all_overrides("brand_product_id", data)
     return jsonify({"ok": True})
 
 
@@ -2126,8 +2282,8 @@ def api_brand_product_id_overrides_put():
 
 @dashboard_bp.route("/api/price-overrides")
 def api_price_overrides_get():
-    cfg = load_config()
-    return jsonify(cfg.get("price_overrides", {}))
+    from product_store import get_product_store
+    return jsonify(get_product_store().get_all_overrides("price"))
 
 
 @dashboard_bp.route("/api/price-overrides", methods=["PUT"])
@@ -2135,9 +2291,8 @@ def api_price_overrides_put():
     data = request.get_json(force=True)
     if not isinstance(data, dict):
         return jsonify({"error": "Expected a JSON object"}), 400
-    cfg = load_config()
-    cfg["price_overrides"] = data
-    save_config(cfg)
+    from product_store import get_product_store
+    get_product_store().set_all_overrides("price", data)
     return jsonify({"ok": True})
 
 
@@ -2357,6 +2512,7 @@ def api_catalog_delist_all():
                 error_count += 1
                 yield json.dumps({"type": "error", "sku": p["SellerSKU"], "error": str(e)}) + "\n"
 
+        _log_activity("catalog", "catalog/delist-all", status="processed", detail=f"Delisted {success_count}, errors {error_count}")
         yield json.dumps({"type": "complete", "success": success_count, "errors": error_count}) + "\n"
 
     return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
@@ -2428,6 +2584,7 @@ def api_catalog_set_all_live():
                 error_count += 1
                 yield json.dumps({"type": "error", "sku": p["SellerSKU"], "error": str(e)}) + "\n"
 
+        _log_activity("catalog", "catalog/set-all-live", status="processed", detail=f"Set live {success_count}, errors {error_count}")
         yield json.dumps({"type": "complete", "success": success_count, "errors": error_count}) + "\n"
 
     return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
@@ -2506,6 +2663,7 @@ def api_catalog_delete_all():
                 yield json.dumps({"type": "error", "error": str(e)}) + "\n"
             time.sleep(1)
 
+        _log_activity("catalog", "catalog/delete-all", status="processed", detail=f"Deleted {success_count}, errors {error_count}")
         yield json.dumps({"type": "complete", "success": success_count, "errors": error_count}) + "\n"
 
     return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
@@ -2521,10 +2679,12 @@ def api_delete_all_published():
     cookie = cfg.get("portal_cookie", "")
 
     def generate():
-        # Step 1: Reset ALL pipeline logs
+        # Step 1: Reset ALL pipeline logs + products table
         clients = _get_clients()
         pipeline = clients["pipeline"]
         reset_count = pipeline.reset_all_jobs()
+        from product_store import get_product_store
+        get_product_store().reset_all_product_statuses()
         yield json.dumps({"type": "reset", "count": reset_count}) + "\n"
 
         # Step 2: Delete all from portal
@@ -2586,6 +2746,7 @@ def api_delete_all_published():
                 yield json.dumps({"type": "error", "error": str(e)}) + "\n"
             time.sleep(0.5)
 
+        _log_activity("delete", "delete/all-products", status="processed", detail=f"Reset {reset_count}, deleted {success_count}, errors {error_count}")
         yield json.dumps({"type": "complete", "reset": reset_count, "deleted": success_count, "errors": error_count}) + "\n"
 
     return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
@@ -2597,10 +2758,10 @@ def api_delete_all_published():
 
 @dashboard_bp.route("/api/events")
 def api_events():
-    """List webhook and SQL events with optional filters."""
+    """List webhook, SQL, and activity events with optional filters."""
     status = request.args.get("status")
     date = request.args.get("date")
-    event_type = request.args.get("type")  # "webhook_shopify" | "sql_db" | None
+    event_type = request.args.get("type")  # "webhook_shopify" | "sql_db" | "gemini" | "push" | "catalog" | "delete" | "order" | None
 
     clients = _get_clients()
     tx_logger = clients["tx_logger"]
@@ -2627,6 +2788,7 @@ def api_events():
                 "product_id": rec.get("product_id") or rec.get("payload", {}).get("id"),
                 "category_id": rec.get("category_id"),
                 "field_count": rec.get("field_count"),
+                "detail": rec.get("detail", ""),
             })
 
         if event_type:
@@ -2852,7 +3014,9 @@ def api_orders_acknowledge():
     try:
         result = bf.acknowledge_order(order_id)
         if result["success"]:
+            _log_activity("order", "order/acknowledge", status="processed", detail=f"Order {order_id}")
             return jsonify({"ok": True, "order_id": order_id})
+        _log_activity("order", "order/acknowledge", status="error", detail=f"Order {order_id}: {result['error'][:100]}")
         return jsonify({"error": result["error"]}), 502
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2880,7 +3044,9 @@ def api_orders_fulfill():
     try:
         result = bf.fulfill_orders([fulfillment])
         if result["success"]:
+            _log_activity("order", "order/fulfill", status="processed", detail=f"Order {order_id}")
             return jsonify({"ok": True, "order_id": order_id})
+        _log_activity("order", "order/fulfill", status="error", detail=f"Order {order_id}: {result['error'][:100]}")
         return jsonify({"error": result["error"]}), 502
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2903,7 +3069,9 @@ def api_orders_cancel():
     try:
         result = bf.cancel_order(order_id, items)
         if result["success"]:
+            _log_activity("order", "order/cancel", status="processed", detail=f"Order {order_id}")
             return jsonify({"ok": True, "order_id": order_id})
+        _log_activity("order", "order/cancel", status="error", detail=f"Order {order_id}: {result['error'][:100]}")
         return jsonify({"error": result["error"]}), 502
     except Exception as e:
         return jsonify({"error": str(e)}), 500

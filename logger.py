@@ -109,11 +109,19 @@ class TransactionLogger:
     def _log_d1(self, record: dict) -> str:
         now = record["received_at"]
         created_date = now[:10]
+        rec_type = record.get("type", "webhook_shopify")
+        # For activity events, store extra fields (detail, product_id) in payload
+        payload = record.get("payload", {})
+        if rec_type != "webhook_shopify":
+            payload = {
+                "detail": record.get("detail", ""),
+                "product_id": record.get("product_id"),
+            }
         self._d1.execute(
             "INSERT INTO webhook_events "
             "(event_id, topic, shop_domain, status, timestamp, received_at, "
-            "status_updated_at, payload, created_date) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "status_updated_at, payload, created_date, type) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 record.get("event_id", ""),
                 record.get("topic", ""),
@@ -122,8 +130,9 @@ class TransactionLogger:
                 record.get("timestamp", ""),
                 now,
                 None,
-                json.dumps(record.get("payload", {})),
+                json.dumps(payload),
                 created_date,
+                rec_type,
             ],
         )
         # Retrieve the inserted row id
@@ -186,12 +195,17 @@ class TransactionLogger:
             "timestamp": row.get("timestamp", ""),
             "received_at": row.get("received_at", ""),
             "status_updated_at": row.get("status_updated_at"),
+            "type": row.get("type", "webhook_shopify"),
         }
         payload_raw = row.get("payload", "{}")
         try:
             rec["payload"] = json.loads(payload_raw) if payload_raw else {}
         except (json.JSONDecodeError, TypeError):
             rec["payload"] = {}
+        # Extract activity event fields from payload
+        if rec["type"] != "webhook_shopify" and isinstance(rec["payload"], dict):
+            rec["detail"] = rec["payload"].get("detail", "")
+            rec["product_id"] = rec["payload"].get("product_id")
         return rec
 
     # ---- filesystem fallback implementations ----

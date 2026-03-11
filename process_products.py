@@ -17,6 +17,7 @@ from pipeline_logger import PipelineLogger
 from shopify_client import ShopifyClient
 from bluefly_client import BlueflyClient
 from sql_lookup import BlueflyDBLookup
+from d1_client import get_d1_client
 from field_mapper import (
     should_sync_product,
     get_metafield,
@@ -40,10 +41,6 @@ BLUEFLY_API_URL = os.environ.get(
 BLUEFLY_SELLER_ID = os.environ.get("BLUEFLY_SELLER_ID", "")
 BLUEFLY_SELLER_TOKEN = os.environ.get("BLUEFLY_SELLER_TOKEN", "")
 
-SQL_SERVER = os.environ.get("SQL_SERVER", "")
-SQL_DATABASE = os.environ.get("SQL_DATABASE", "")
-SQL_USER = os.environ.get("SQL_USER", "")
-SQL_PASSWORD = os.environ.get("SQL_PASSWORD", "")
 
 # --- Topic filters ---
 PRODUCT_TOPICS = {"products/create", "products/update", "products/delete"}
@@ -155,16 +152,14 @@ def process_product_event(
         pipeline.update_stage(job_path, "mapping")
         print("  Mapping fields...")
 
-        # SQL lookup for each variant
+        # SQL lookup for all variants in one query
         sql_field_map = {}
         if category_id:
-            for variant in enriched.get("variants", []):
-                variant_title = variant.get("title", "")
-                if variant_title:
-                    sql_fields = db.lookup_category_fields(category_id, variant_title)
-                    sql_field_map[variant_title] = sql_fields
-                    if sql_fields:
-                        print(f"    SQL fields for '{variant_title}': {list(sql_fields.keys())}")
+            vt_list = [v.get("title", "") for v in enriched.get("variants", []) if v.get("title", "")]
+            sql_field_map = db.lookup_category_fields_batch(category_id, vt_list)
+            for vt, fields in sql_field_map.items():
+                if fields:
+                    print(f"    SQL fields for '{vt}': {list(fields.keys())}")
 
         # All product events (create + update) use /v2/products with full payload.
         # This endpoint is an upsert — creates or updates all fields (color, size,
@@ -338,8 +333,6 @@ def main():
         missing.append("BLUEFLY_SELLER_ID")
     if not BLUEFLY_SELLER_TOKEN:
         missing.append("BLUEFLY_SELLER_TOKEN")
-    if not SQL_SERVER:
-        missing.append("SQL_SERVER")
     if missing:
         print(f"ERROR: Missing .env variables: {', '.join(missing)}")
         return
@@ -349,7 +342,7 @@ def main():
     pipeline = PipelineLogger(PIPELINE_LOG_DIR)
     shopify = ShopifyClient(SHOPIFY_STORE, SHOPIFY_ACCESS_TOKEN)
     bluefly = BlueflyClient(BLUEFLY_SELLER_ID, BLUEFLY_SELLER_TOKEN, BLUEFLY_API_URL)
-    db = BlueflyDBLookup(SQL_SERVER, SQL_DATABASE, SQL_USER, SQL_PASSWORD)
+    db = BlueflyDBLookup(get_d1_client())
 
     # Scan for unread events
     print(f"\nScanning {LOG_DIR} for unread events...")
@@ -385,18 +378,17 @@ def main():
             tx_logger.update_status(ev["file"], "processed")
 
     # Process all events
-    with db:
-        # Product events first
-        for event_info in latest_products:
-            process_product_event(
-                event_info, tx_logger, pipeline, shopify, bluefly, db
-            )
+    # Product events first
+    for event_info in latest_products:
+        process_product_event(
+            event_info, tx_logger, pipeline, shopify, bluefly, db
+        )
 
-        # Then inventory events
-        for event_info in inventory_events:
-            process_inventory_event(
-                event_info, tx_logger, pipeline, shopify, bluefly, db
-            )
+    # Then inventory events
+    for event_info in inventory_events:
+        process_inventory_event(
+            event_info, tx_logger, pipeline, shopify, bluefly, db
+        )
 
     # Summary
     print(f"\n{'='*60}")

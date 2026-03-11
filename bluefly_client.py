@@ -18,10 +18,11 @@ Order endpoints:
 import json
 import logging
 import time
+from urllib.parse import quote
+
+import requests as req_lib
 
 logger = logging.getLogger(__name__)
-from urllib.request import Request, urlopen
-from urllib.error import HTTPError, URLError
 
 
 BLUEFLY_API_URL = (
@@ -45,6 +46,11 @@ class BlueflyClient:
         self.orders_base_url = self.base_url + "/orders"
         self.seller_id = seller_id
         self.seller_token = seller_token
+        self._session = req_lib.Session()
+        self._session.headers.update({
+            "sellerid": self.seller_id,
+            "sellertoken": self.seller_token,
+        })
 
     # ------------------------------------------------------------------
     # GET helper
@@ -67,32 +73,28 @@ class BlueflyClient:
 
         for attempt in range(1, max_retries + 1):
             try:
-                req = Request(url, method="GET")
-                req.add_header("sellerid", self.seller_id)
-                req.add_header("sellertoken", self.seller_token)
-                req.add_header("Accept", "application/json")
+                resp = self._session.get(url, timeout=60)
+                resp.raise_for_status()
+                resp_body = resp.text
 
-                resp = urlopen(req, timeout=60)
-                resp_body = resp.read().decode("utf-8")
-
-                # Try to parse JSON
                 try:
-                    data = json.loads(resp_body)
-                except json.JSONDecodeError:
+                    data = resp.json()
+                except (json.JSONDecodeError, ValueError):
                     data = resp_body
 
                 return {
-                    "status_code": resp.status,
+                    "status_code": resp.status_code,
                     "body": resp_body,
                     "data": data,
                     "success": True,
                     "error": None,
                 }
-            except HTTPError as e:
-                resp_body = e.read().decode("utf-8", errors="replace")
-                last_error = f"HTTP {e.code}: {resp_body[:500]}"
+            except req_lib.exceptions.HTTPError as e:
+                resp_body = e.response.text[:500] if e.response is not None else ""
+                status_code = e.response.status_code if e.response is not None else 0
+                last_error = f"HTTP {status_code}: {resp_body}"
 
-                if e.code >= 500 or e.code == 429:
+                if status_code >= 500 or status_code == 429:
                     wait = 2 ** attempt
                     print(
                         f"  Bluefly GET retry {attempt}/{max_retries} "
@@ -102,13 +104,13 @@ class BlueflyClient:
                     continue
                 else:
                     return {
-                        "status_code": e.code,
-                        "body": resp_body,
+                        "status_code": status_code,
+                        "body": e.response.text if e.response is not None else "",
                         "data": None,
                         "success": False,
                         "error": last_error,
                     }
-            except (URLError, TimeoutError, OSError) as e:
+            except (req_lib.exceptions.ConnectionError, req_lib.exceptions.Timeout, OSError) as e:
                 last_error = str(e)
                 wait = 2 ** attempt
                 print(
@@ -126,40 +128,31 @@ class BlueflyClient:
         }
 
     # ------------------------------------------------------------------
-    # POST helper
+    # PUT helper
     # ------------------------------------------------------------------
 
     def _put(
         self, url: str, payload: list[dict], max_retries: int = 3
     ) -> dict:
-        """
-        PUT JSON payload to a Bluefly/Rithum endpoint with retry logic.
-
-        Returns same structure as _post().
-        """
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        """PUT JSON payload to a Bluefly/Rithum endpoint with retry logic."""
         last_error = None
 
         for attempt in range(1, max_retries + 1):
             try:
-                req = Request(url, data=body, method="PUT")
-                req.add_header("Content-Type", "application/json")
-                req.add_header("sellerid", self.seller_id)
-                req.add_header("sellertoken", self.seller_token)
-
-                resp = urlopen(req, timeout=30)
-                resp_body = resp.read().decode("utf-8")
+                resp = self._session.put(url, json=payload, timeout=30)
+                resp.raise_for_status()
                 return {
-                    "status_code": resp.status,
-                    "body": resp_body,
+                    "status_code": resp.status_code,
+                    "body": resp.text,
                     "success": True,
                     "error": None,
                 }
-            except HTTPError as e:
-                resp_body = e.read().decode("utf-8", errors="replace")
-                last_error = f"HTTP {e.code}: {resp_body[:500]}"
+            except req_lib.exceptions.HTTPError as e:
+                resp_body = e.response.text[:500] if e.response is not None else ""
+                status_code = e.response.status_code if e.response is not None else 0
+                last_error = f"HTTP {status_code}: {resp_body}"
 
-                if e.code >= 500 or e.code == 429:
+                if status_code >= 500 or status_code == 429:
                     wait = 2 ** attempt
                     print(
                         f"  Bluefly PUT retry {attempt}/{max_retries} "
@@ -169,12 +162,12 @@ class BlueflyClient:
                     continue
                 else:
                     return {
-                        "status_code": e.code,
-                        "body": resp_body,
+                        "status_code": status_code,
+                        "body": e.response.text if e.response is not None else "",
                         "success": False,
                         "error": last_error,
                     }
-            except (URLError, TimeoutError, OSError) as e:
+            except (req_lib.exceptions.ConnectionError, req_lib.exceptions.Timeout, OSError) as e:
                 last_error = str(e)
                 wait = 2 ** attempt
                 print(
@@ -190,44 +183,32 @@ class BlueflyClient:
             "error": f"All {max_retries} attempts failed. Last: {last_error}",
         }
 
+    # ------------------------------------------------------------------
+    # POST helper
+    # ------------------------------------------------------------------
+
     def _post(
         self, url: str, payload: list[dict], max_retries: int = 3
     ) -> dict:
-        """
-        POST JSON payload to a Bluefly/Rithum endpoint with retry logic.
-
-        Returns:
-            {
-                "status_code": int,
-                "body": str,
-                "success": bool,
-                "error": str | None,
-            }
-        """
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        """POST JSON payload to a Bluefly/Rithum endpoint with retry logic."""
         last_error = None
 
         for attempt in range(1, max_retries + 1):
             try:
-                req = Request(url, data=body, method="POST")
-                req.add_header("Content-Type", "application/json")
-                req.add_header("sellerid", self.seller_id)
-                req.add_header("sellertoken", self.seller_token)
-
-                resp = urlopen(req, timeout=30)
-                resp_body = resp.read().decode("utf-8")
+                resp = self._session.post(url, json=payload, timeout=30)
+                resp.raise_for_status()
                 return {
-                    "status_code": resp.status,
-                    "body": resp_body,
+                    "status_code": resp.status_code,
+                    "body": resp.text,
                     "success": True,
                     "error": None,
                 }
-            except HTTPError as e:
-                resp_body = e.read().decode("utf-8", errors="replace")
-                last_error = f"HTTP {e.code}: {resp_body[:500]}"
+            except req_lib.exceptions.HTTPError as e:
+                resp_body = e.response.text[:500] if e.response is not None else ""
+                status_code = e.response.status_code if e.response is not None else 0
+                last_error = f"HTTP {status_code}: {resp_body}"
 
-                # Retry on 5xx or 429 only
-                if e.code >= 500 or e.code == 429:
+                if status_code >= 500 or status_code == 429:
                     wait = 2 ** attempt
                     print(
                         f"  Bluefly retry {attempt}/{max_retries} "
@@ -237,12 +218,12 @@ class BlueflyClient:
                     continue
                 else:
                     return {
-                        "status_code": e.code,
-                        "body": resp_body,
+                        "status_code": status_code,
+                        "body": e.response.text if e.response is not None else "",
                         "success": False,
                         "error": last_error,
                     }
-            except (URLError, TimeoutError, OSError) as e:
+            except (req_lib.exceptions.ConnectionError, req_lib.exceptions.Timeout, OSError) as e:
                 last_error = str(e)
                 wait = 2 ** attempt
                 print(
@@ -271,7 +252,7 @@ class BlueflyClient:
 
         Returns the raw result dict with 'data' containing the catalog.
         """
-        catalog_url = self.api_url 
+        catalog_url = self.api_url
         result = self._get(catalog_url)
         if not result["success"]:
             return result
@@ -402,7 +383,6 @@ class BlueflyClient:
 
         Returns the parsed result dict with 'data' containing the order list.
         """
-        from urllib.parse import quote
         url = f"{self.orders_v2_url}?status={quote(status)}&limit=2147483647"
         logger.info("get_orders: fetching status=%s url=%s", status, url)
         result = self._get(url, max_retries)
@@ -489,41 +469,35 @@ class BlueflyClient:
     def acknowledge_order(
         self, order_id: str, max_retries: int = 3
     ) -> dict:
-        """
-        POST /orders/:orderId/acknowledge — Acknowledge receipt of an order.
-        """
+        """POST /orders/:orderId/acknowledge — Acknowledge receipt of an order."""
         url = f"{self.orders_base_url}/{order_id}/acknowledge"
-        body = b""
         last_error = None
 
         for attempt in range(1, max_retries + 1):
             try:
-                req = Request(url, data=body, method="POST")
-                req.add_header("sellerid", self.seller_id)
-                req.add_header("sellertoken", self.seller_token)
-                req.add_header("Content-Length", "0")
-
-                resp = urlopen(req, timeout=30)
-                resp_body = resp.read().decode("utf-8")
+                resp = self._session.post(url, data=b"", timeout=30,
+                                          headers={"Content-Length": "0"})
+                resp.raise_for_status()
                 return {
-                    "status_code": resp.status,
-                    "body": resp_body,
+                    "status_code": resp.status_code,
+                    "body": resp.text,
                     "success": True,
                     "error": None,
                 }
-            except HTTPError as e:
-                resp_body = e.read().decode("utf-8", errors="replace")
-                last_error = f"HTTP {e.code}: {resp_body[:500]}"
-                if e.code >= 500 or e.code == 429:
+            except req_lib.exceptions.HTTPError as e:
+                resp_body = e.response.text[:500] if e.response is not None else ""
+                status_code = e.response.status_code if e.response is not None else 0
+                last_error = f"HTTP {status_code}: {resp_body}"
+                if status_code >= 500 or status_code == 429:
                     time.sleep(2 ** attempt)
                     continue
                 return {
-                    "status_code": e.code,
-                    "body": resp_body,
+                    "status_code": status_code,
+                    "body": e.response.text if e.response is not None else "",
                     "success": False,
                     "error": last_error,
                 }
-            except (URLError, TimeoutError, OSError) as e:
+            except (req_lib.exceptions.ConnectionError, req_lib.exceptions.Timeout, OSError) as e:
                 last_error = str(e)
                 time.sleep(2 ** attempt)
 
@@ -560,45 +534,35 @@ class BlueflyClient:
     def cancel_order(
         self, order_id: str, items: list[dict], max_retries: int = 3
     ) -> dict:
-        """
-        POST /orders/:orderId/cancel — Cancel an unfillable order.
-
-        items: list of dicts, each with:
-            {"ID": str, "Reason": str, "Quantity": int, "SellerSku": str}
-        """
+        """POST /orders/:orderId/cancel — Cancel an unfillable order."""
         url = f"{self.orders_base_url}/{order_id}/cancel"
         payload = {"OrderID": order_id, "Items": items}
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         last_error = None
 
         for attempt in range(1, max_retries + 1):
             try:
-                req = Request(url, data=body, method="POST")
-                req.add_header("Content-Type", "application/json")
-                req.add_header("sellerid", self.seller_id)
-                req.add_header("sellertoken", self.seller_token)
-
-                resp = urlopen(req, timeout=30)
-                resp_body = resp.read().decode("utf-8")
+                resp = self._session.post(url, json=payload, timeout=30)
+                resp.raise_for_status()
                 return {
-                    "status_code": resp.status,
-                    "body": resp_body,
+                    "status_code": resp.status_code,
+                    "body": resp.text,
                     "success": True,
                     "error": None,
                 }
-            except HTTPError as e:
-                resp_body = e.read().decode("utf-8", errors="replace")
-                last_error = f"HTTP {e.code}: {resp_body[:500]}"
-                if e.code >= 500 or e.code == 429:
+            except req_lib.exceptions.HTTPError as e:
+                resp_body = e.response.text[:500] if e.response is not None else ""
+                status_code = e.response.status_code if e.response is not None else 0
+                last_error = f"HTTP {status_code}: {resp_body}"
+                if status_code >= 500 or status_code == 429:
                     time.sleep(2 ** attempt)
                     continue
                 return {
-                    "status_code": e.code,
-                    "body": resp_body,
+                    "status_code": status_code,
+                    "body": e.response.text if e.response is not None else "",
                     "success": False,
                     "error": last_error,
                 }
-            except (URLError, TimeoutError, OSError) as e:
+            except (req_lib.exceptions.ConnectionError, req_lib.exceptions.Timeout, OSError) as e:
                 last_error = str(e)
                 time.sleep(2 ** attempt)
 

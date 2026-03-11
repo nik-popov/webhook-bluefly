@@ -32,6 +32,9 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_we_date ON webhook_events(created_date)",
     "CREATE INDEX IF NOT EXISTS idx_we_event_id ON webhook_events(event_id)",
     "CREATE INDEX IF NOT EXISTS idx_we_status_date ON webhook_events(status, created_date)",
+    # -- add type column for activity events (gemini, push, catalog, etc.) --
+    "ALTER TABLE webhook_events ADD COLUMN type TEXT DEFAULT 'webhook_shopify'",
+    "CREATE INDEX IF NOT EXISTS idx_we_type ON webhook_events(type)",
     # -- pipeline_jobs --
     """CREATE TABLE IF NOT EXISTS pipeline_jobs (
         id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,9 +73,16 @@ SCHEMA_STATEMENTS = [
 
 def create_schema(client: D1Client):
     for stmt in SCHEMA_STATEMENTS:
-        client.execute(stmt)
-        label = stmt.strip().split("\n")[0][:60]
-        print(f"  OK: {label}")
+        try:
+            client.execute(stmt)
+            label = stmt.strip().split("\n")[0][:60]
+            print(f"  OK: {label}")
+        except Exception as e:
+            if "duplicate column" in str(e).lower() or "already exists" in str(e).lower():
+                label = stmt.strip().split("\n")[0][:60]
+                print(f"  SKIP (already exists): {label}")
+            else:
+                raise
 
 
 def migrate_webhook_events(client: D1Client, log_dir: str):
