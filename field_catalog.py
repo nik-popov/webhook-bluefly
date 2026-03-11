@@ -11,14 +11,13 @@ import os
 import re
 
 _TSV_PATH = os.path.join(os.path.dirname(__file__), "data", "bluefly_field_catalog.tsv")
-_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+from d1_client import get_config_store
 
 
 def _load_size_mappings_from_config():
-    """Load size_mappings from config.json, returning raw dict (string keys)."""
+    """Load size_mappings from config, returning raw dict (string keys)."""
     try:
-        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
+        cfg = get_config_store().load()
         return cfg.get("size_mappings", {})
     except Exception:
         return {}
@@ -86,20 +85,18 @@ class BlueflyFieldCatalog:
 
     @staticmethod
     def _load_size_scale_overrides():
-        """Load size_scale_overrides from config.json (label -> Bluefly field name)."""
+        """Load size_scale_overrides from config (label -> Bluefly field name)."""
         try:
-            with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
+            cfg = get_config_store().load()
             return cfg.get("size_scale_overrides", {})
         except Exception:
             return {}
 
     @staticmethod
     def _load_brand_conversions():
-        """Load brand_size_conversions from config.json (label -> {size: value})."""
+        """Load brand_size_conversions from config (label -> {size: value})."""
         try:
-            with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
+            cfg = get_config_store().load()
             raw = cfg.get("brand_size_conversions", {})
             # Parse numeric keys for each brand table
             return {label: _parse_numeric_keys(table) for label, table in raw.items()}

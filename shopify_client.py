@@ -264,6 +264,7 @@ class ShopifyClient:
               variants(first: 100) {
                 edges {
                   node {
+                    id
                     sku
                     title
                     price
@@ -329,6 +330,9 @@ class ShopifyClient:
                 img = node.get("featuredImage")
                 image_url = img.get("url") if img else None
                 variant_ids = [v.get("id", "").split("/")[-1] for v in variants if "/" in str(v.get("id", ""))]
+                variant_skus = [v.get("sku", "") for v in variants if v.get("sku")]
+                first_variant_sku = variants[0].get("sku", "") if variants else ""
+                variants_detail = [{"sku": v.get("sku", ""), "title": v.get("title", ""), "id": v.get("id", "").split("/")[-1] if v.get("id") else ""} for v in variants]
 
                 all_products.append({
                     "id": numeric_id,
@@ -350,6 +354,9 @@ class ShopifyClient:
                     "total_quantity": total_qty,
                     "has_default_variants": has_default_variants,
                     "variant_ids": variant_ids,
+                    "variant_skus": variant_skus,
+                    "first_variant_sku": first_variant_sku,
+                    "variants_detail": variants_detail,
                 })
         return all_products
 
@@ -491,6 +498,9 @@ class ShopifyClient:
                 img = node.get("featuredImage")
                 image_url = img.get("url") if img else None
                 variant_ids = [v.get("id", "").split("/")[-1] for v in variants if "/" in str(v.get("id", ""))]
+                variant_skus = [v.get("sku", "") for v in variants if v.get("sku")]
+                first_variant_sku = variants[0].get("sku", "") if variants else ""
+                variants_detail = [{"sku": v.get("sku", ""), "title": v.get("title", ""), "id": v.get("id", "").split("/")[-1] if v.get("id") else ""} for v in variants]
 
                 all_products.append({
                     "id": numeric_id,
@@ -512,6 +522,9 @@ class ShopifyClient:
                     "total_quantity": total_qty,
                     "has_default_variants": has_default_variants,
                     "variant_ids": variant_ids,
+                    "variant_skus": variant_skus,
+                    "first_variant_sku": first_variant_sku,
+                    "variants_detail": variants_detail,
                 })
 
             page_info = data.get("pageInfo", {})
@@ -658,6 +671,9 @@ class ShopifyClient:
                 img = node.get("featuredImage")
                 image_url = img.get("url") if img else None
                 variant_ids = [v.get("id", "").split("/")[-1] for v in variants if "/" in str(v.get("id", ""))]
+                variant_skus = [v.get("sku", "") for v in variants if v.get("sku")]
+                first_variant_sku = variants[0].get("sku", "") if variants else ""
+                variants_detail = [{"sku": v.get("sku", ""), "title": v.get("title", ""), "id": v.get("id", "").split("/")[-1] if v.get("id") else ""} for v in variants]
 
                 page_products.append({
                     "id": numeric_id,
@@ -679,6 +695,9 @@ class ShopifyClient:
                     "total_quantity": total_qty,
                     "has_default_variants": has_default_variants,
                     "variant_ids": variant_ids,
+                    "variant_skus": variant_skus,
+                    "first_variant_sku": first_variant_sku,
+                    "variants_detail": variants_detail,
                 })
 
             page_info = data.get("pageInfo", {})

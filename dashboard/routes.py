@@ -28,9 +28,9 @@ Provides:
 """
 
 import os
+import re
 import csv
 import json
-import glob
 import time
 import logging
 import threading
@@ -58,9 +58,23 @@ def _patch_metafield(metafields: list, namespace: str, key: str, value: str):
             mf["value"] = value
             return
     metafields.append({"namespace": namespace, "key": key, "value": value})
+
+
+def _resolve_bpid_template(template: str, product: dict) -> str:
+    """Resolve {field} placeholders in a brand_product_id override template."""
+    def replacer(m):
+        val = product.get(m.group(1))
+        if val is None:
+            return ""
+        if isinstance(val, list):
+            return ",".join(str(v) for v in val)
+        return str(val)
+    return re.sub(r"\{(\w+)\}", replacer, template)
+
+
 logger = logging.getLogger(__name__)
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
+from d1_client import get_config_store
 
 # Default configuration structure
 DEFAULT_CONFIG = {
@@ -113,9 +127,8 @@ def handle_500(e):
 
 def load_config() -> dict:
     try:
-        with open(CONFIG_PATH, "r") as f:
-            cfg = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+        cfg = get_config_store().load()
+    except Exception:
         cfg = {}
 
     # Merge with defaults so new keys always exist
@@ -128,9 +141,7 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict):
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(cfg, f, indent=2)
-        f.write("\n")
+    get_config_store().save(cfg)
 
 
 # -----------------------------------------------------------------------
@@ -616,6 +627,15 @@ def _enrich_products(products, synced_products, cfg):
             p["vendor"] = v_override
             p["vendor_overridden"] = True
 
+        # Apply brand_product_id override
+        bpid_override_raw = cfg.get("brand_product_id_overrides", {}).get(str(pid))
+        if bpid_override_raw:
+            resolved = _resolve_bpid_template(bpid_override_raw, p)
+            if resolved:
+                p["brand_product_id"] = resolved
+            p["brand_product_id_overridden"] = True
+            p["brand_product_id_template"] = bpid_override_raw
+
         # Apply price override
         pr_override = cfg.get("price_overrides", {}).get(str(pid))
         if pr_override:
@@ -668,8 +688,7 @@ def _fetch_and_enrich():
         return None, None, None, str(e)
 
     cfg = load_config()
-    pipeline_dir = clients["pipeline"].log_dir
-    synced_products = _get_synced_product_ids(pipeline_dir)
+    synced_products = clients["pipeline"].get_synced_product_ids()
     _enrich_products(all_products, synced_products, cfg)
     return all_products, cfg, synced_products, None
 
@@ -695,8 +714,7 @@ def api_products():
 def api_stats():
     """Lightweight dashboard stats from pipeline logs only (no Shopify API calls)."""
     clients = _get_clients()
-    pipeline_dir = clients["pipeline"].log_dir
-    synced_products = _get_synced_product_ids(pipeline_dir)
+    synced_products = clients["pipeline"].get_synced_product_ids()
 
     synced_count = sum(1 for info in synced_products.values()
                        if info.get("status") == "pushed")
@@ -714,8 +732,7 @@ def api_products_published():
         return jsonify({"error": "Shopify client not configured"}), 500
 
     cfg = load_config()
-    pipeline_dir = clients["pipeline"].log_dir
-    synced_products = _get_synced_product_ids(pipeline_dir)
+    synced_products = clients["pipeline"].get_synced_product_ids()
     pushed_ids = [pid for pid, info in synced_products.items()
                   if info.get("status") in ("pushed", "size_error")]
 
@@ -756,8 +773,7 @@ def _stream_products(filter_status=None):
         return jsonify({"error": "Shopify client not configured"}), 500
 
     cfg = load_config()
-    pipeline_dir = clients["pipeline"].log_dir
-    synced_products = _get_synced_product_ids(pipeline_dir)
+    synced_products = clients["pipeline"].get_synced_product_ids()
 
     import app as _app
 
@@ -795,46 +811,6 @@ def _stream_products(filter_status=None):
 
     return Response(stream_with_context(generate()),
                     content_type="application/x-ndjson")
-
-
-def _get_synced_product_ids(pipeline_dir: str) -> dict:
-    """Scan pipeline_logs to find the latest status per product_id.
-
-    For inventory-triggered jobs the top-level product_id was historically
-    recorded as inventory_item_id.  Fall back to the enriched-stage
-    product_id (the real Shopify ID) when present.
-    """
-    result = {}
-    pattern = os.path.join(pipeline_dir, "*", "*.json")
-    for fpath in sorted(glob.glob(pattern), key=os.path.getmtime):
-        try:
-            with open(fpath, "r", encoding="utf-8") as f:
-                record = json.load(f)
-            pid = record.get("product_id")
-            # For inventory webhooks the real Shopify product_id is stored
-            # in the enriched stage data — prefer that when available.
-            for stage in record.get("stages", []):
-                if stage.get("stage") == "enriched":
-                    enriched_pid = (stage.get("data") or {}).get("product_id")
-                    if enriched_pid:
-                        pid = enriched_pid
-                    break
-            if pid:
-                entry = {
-                    "status": record.get("status", "unknown"),
-                    "time": record.get("created_at"),
-                }
-                # Extract size errors from pushed or size_error stage data
-                for stage in record.get("stages", []):
-                    if stage.get("stage") in ("pushed", "size_error"):
-                        se = (stage.get("data") or {}).get("size_errors")
-                        if se:
-                            entry["size_errors"] = se
-                        break
-                result[pid] = entry
-        except (json.JSONDecodeError, OSError):
-            continue
-    return result
 
 
 @dashboard_bp.route("/api/products/push", methods=["POST"])
@@ -884,6 +860,27 @@ def api_push_product():
         vendor_override = cfg.get("vendor_overrides", {}).get(str(product_id))
         if vendor_override:
             enriched["vendor"] = vendor_override
+
+        # Apply brand_product_id override
+        bpid_override_raw = cfg.get("brand_product_id_overrides", {}).get(str(product_id))
+        if bpid_override_raw:
+            _variants = enriched.get("variants", [])
+            bpid_product = {
+                "id": enriched.get("id", product_id),
+                "title": enriched.get("title", ""),
+                "vendor": enriched.get("vendor", ""),
+                "product_type": enriched.get("productType", ""),
+                "first_sku": (_variants[0].get("sku", "") if _variants else ""),
+                "first_variant_sku": (_variants[0].get("sku", "") if _variants else ""),
+                "brand_product_id": get_metafield(metafields, "custom", "brand_product_id") or "",
+                "gender": get_metafield(metafields, "custom", "gender") or "",
+                "color": get_metafield(metafields, "custom", "color") or "",
+                "variant_ids": [str(v.get("id", "")).split("/")[-1] for v in _variants if v.get("id")],
+                "variant_skus": [v.get("sku", "") for v in _variants if v.get("sku")],
+            }
+            resolved = _resolve_bpid_template(bpid_override_raw, bpid_product)
+            if resolved:
+                _patch_metafield(metafields, "custom", "brand_product_id", resolved)
 
         # Apply image URL overrides (format conversions, edited images)
         _apply_image_overrides(enriched, int(product_id), cfg)
@@ -973,8 +970,7 @@ def api_push_product():
             }), 422
 
         # Push — use PUT if already published (full overwrite), POST for first push
-        pipeline_dir = pipeline.log_dir
-        synced = _get_synced_product_ids(pipeline_dir)
+        synced = pipeline.get_synced_product_ids()
         already_published = synced.get(int(product_id), {}).get("status") == "pushed"
         if already_published:
             result = bluefly.update_products_full([bluefly_payload])
@@ -1042,11 +1038,12 @@ def api_push_bulk():
             eligible = [p for p in eligible if (p.get("total_quantity", 0) or 0) > 0]
         if elig.get("require_images", True):
             eligible = [p for p in eligible if p.get("image_url")]
+        bpid_overrides = cfg.get("brand_product_id_overrides", {})
         if elig.get("require_brand_product_id", True):
-            eligible = [p for p in eligible if p.get("brand_product_id")]
+            eligible = [p for p in eligible if p.get("brand_product_id") or bpid_overrides.get(str(p["id"]))]
 
         # Check which are already synced
-        synced = _get_synced_product_ids(pipeline.log_dir)
+        synced = pipeline.get_synced_product_ids()
         to_push = [p for p in eligible if p["id"] not in synced or synced[p["id"]]["status"] != "pushed"]
 
         yield json.dumps({"type": "start", "total": len(to_push)}) + "\n"
@@ -1089,6 +1086,26 @@ def api_push_bulk():
                 v_ov = vendor_overrides.get(str(pid))
                 if v_ov:
                     enriched["vendor"] = v_ov
+
+                # Apply brand_product_id override
+                bpid_ov_raw = bpid_overrides.get(str(pid))
+                if bpid_ov_raw:
+                    _variants = enriched.get("variants", [])
+                    bpid_product = {
+                        "id": enriched.get("id", pid),
+                        "title": enriched.get("title", ""),
+                        "vendor": enriched.get("vendor", ""),
+                        "product_type": enriched.get("productType", ""),
+                        "first_sku": (_variants[0].get("sku", "") if _variants else ""),
+                        "brand_product_id": get_metafield(metafields, "custom", "brand_product_id") or "",
+                        "gender": get_metafield(metafields, "custom", "gender") or "",
+                        "color": get_metafield(metafields, "custom", "color") or "",
+                        "variant_ids": [str(v.get("id", "")).split("/")[-1] for v in _variants if v.get("id")],
+                        "variant_skus": [v.get("sku", "") for v in _variants if v.get("sku")],
+                    }
+                    resolved = _resolve_bpid_template(bpid_ov_raw, bpid_product)
+                    if resolved:
+                        _patch_metafield(metafields, "custom", "brand_product_id", resolved)
 
                 # Apply image URL overrides
                 _apply_image_overrides(enriched, pid, cfg)
@@ -1242,7 +1259,7 @@ def api_retry_errors():
     cfg = load_config()
     adj = cfg.get("price_adjustment_pct", 0)
     field_defaults = cfg.get("field_defaults", {})
-    synced = _get_synced_product_ids(pipeline.log_dir)
+    synced = pipeline.get_synced_product_ids()
 
     resolved = 0
     still_failing = 0
@@ -1259,7 +1276,38 @@ def api_retry_errors():
             if not category_id:
                 continue
 
-            # Apply image URL overrides
+            # Apply overrides
+            override_cat = cfg.get("category_overrides", {}).get(str(pid))
+            if override_cat:
+                category_id = override_cat
+                _patch_metafield(metafields, "custom", "bluefly_category", override_cat)
+            sf_override = cfg.get("size_field_overrides", {}).get(str(pid))
+            if sf_override:
+                _patch_metafield(metafields, "custom", "size_field_override", sf_override)
+            t_ov = cfg.get("title_overrides", {}).get(str(pid))
+            if t_ov:
+                enriched["title"] = t_ov
+            v_ov = cfg.get("vendor_overrides", {}).get(str(pid))
+            if v_ov:
+                enriched["vendor"] = v_ov
+            bpid_ov_raw = cfg.get("brand_product_id_overrides", {}).get(str(pid))
+            if bpid_ov_raw:
+                _variants = enriched.get("variants", [])
+                bpid_product = {
+                    "id": enriched.get("id", pid),
+                    "title": enriched.get("title", ""),
+                    "vendor": enriched.get("vendor", ""),
+                    "product_type": enriched.get("productType", ""),
+                    "first_sku": (_variants[0].get("sku", "") if _variants else ""),
+                    "brand_product_id": get_metafield(metafields, "custom", "brand_product_id") or "",
+                    "gender": get_metafield(metafields, "custom", "gender") or "",
+                    "color": get_metafield(metafields, "custom", "color") or "",
+                    "variant_ids": [str(v.get("id", "")).split("/")[-1] for v in _variants if v.get("id")],
+                    "variant_skus": [v.get("sku", "") for v in _variants if v.get("sku")],
+                }
+                resolved_bpid = _resolve_bpid_template(bpid_ov_raw, bpid_product)
+                if resolved_bpid:
+                    _patch_metafield(metafields, "custom", "brand_product_id", resolved_bpid)
             _apply_image_overrides(enriched, int(pid), cfg)
 
             sql_field_map = {}
@@ -1272,6 +1320,15 @@ def api_retry_errors():
                             sql_field_map[vt] = db.lookup_category_fields(category_id, vt)
             except Exception:
                 pass
+
+            price_ov = cfg.get("price_overrides", {}).get(str(pid))
+            if price_ov:
+                if price_ov.get("type") == "fixed":
+                    for v in enriched.get("variants", []):
+                        v["price"] = str(price_ov["value"])
+                    adj = 0
+                elif price_ov.get("type") == "pct":
+                    adj = float(price_ov["value"])
 
             payload = build_bluefly_payload(
                 enriched, metafields, sql_field_map,
@@ -1341,31 +1398,12 @@ def api_reset_sync():
         return jsonify({"error": "product_ids or all required"}), 400
 
     clients = _get_clients()
-    pipeline_dir = clients["pipeline"].log_dir
-    pattern = os.path.join(pipeline_dir, "*", "*.json")
+    pipeline = clients["pipeline"]
 
-    deleted = 0
-    for fpath in glob.glob(pattern):
-        try:
-            if reset_all:
-                os.remove(fpath)
-                deleted += 1
-            else:
-                with open(fpath, "r", encoding="utf-8") as f:
-                    record = json.load(f)
-                pid = str(record.get("product_id", ""))
-                # Also check enriched-stage product_id (inventory jobs)
-                for stage in record.get("stages", []):
-                    if stage.get("stage") == "enriched":
-                        ep = str((stage.get("data") or {}).get("product_id", ""))
-                        if ep:
-                            pid = ep
-                        break
-                if pid in product_ids:
-                    os.remove(fpath)
-                    deleted += 1
-        except (OSError, json.JSONDecodeError):
-            continue
+    if reset_all:
+        deleted = pipeline.reset_all_jobs()
+    else:
+        deleted, _ = pipeline.delete_jobs_by_product_ids(product_ids)
 
     return jsonify({"reset": deleted})
 
@@ -1389,33 +1427,8 @@ def api_delete_selected():
     def generate():
         # Step 1: Reset pipeline logs AND collect pushed SKUs for portal matching
         clients = _get_clients()
-        pipeline_dir = clients["pipeline"].log_dir
-        pattern = os.path.join(pipeline_dir, "*", "*.json")
-        reset_count = 0
-        pushed_skus = set()
-        for fpath in glob.glob(pattern):
-            try:
-                with open(fpath, "r", encoding="utf-8") as f:
-                    record = json.load(f)
-                pid = str(record.get("product_id", ""))
-                for stage in record.get("stages", []):
-                    if stage.get("stage") == "enriched":
-                        ep = str((stage.get("data") or {}).get("product_id", ""))
-                        if ep:
-                            pid = ep
-                        break
-                if pid in product_ids:
-                    # Extract SKU from pushed/size_error stage before deleting
-                    for stage in record.get("stages", []):
-                        if stage.get("stage") in ("pushed", "size_error"):
-                            sku = (stage.get("data") or {}).get("sku", "")
-                            if sku:
-                                pushed_skus.add(sku)
-                            break
-                    os.remove(fpath)
-                    reset_count += 1
-            except (OSError, json.JSONDecodeError):
-                continue
+        pipeline = clients["pipeline"]
+        reset_count, pushed_skus = pipeline.delete_jobs_by_product_ids(product_ids)
 
         yield json.dumps({"type": "reset", "count": reset_count}) + "\n"
 
@@ -1641,7 +1654,7 @@ def api_catalog_claim():
     try:
         product_id = int(product_id)
         # Check if already claimed
-        synced = _get_synced_product_ids(pipeline.log_dir)
+        synced = pipeline.get_synced_product_ids()
         if synced.get(product_id, {}).get("status") == "pushed":
             return jsonify({"success": True, "product_id": product_id, "already": True})
 
@@ -1699,6 +1712,28 @@ def api_sync_qty_price():
         vendor_override = cfg.get("vendor_overrides", {}).get(str(product_id))
         if vendor_override:
             enriched["vendor"] = vendor_override
+
+        # Apply brand_product_id override
+        bpid_override_raw = cfg.get("brand_product_id_overrides", {}).get(str(product_id))
+        if bpid_override_raw:
+            _variants = enriched.get("variants", [])
+            bpid_product = {
+                "id": enriched.get("id", product_id),
+                "title": enriched.get("title", ""),
+                "vendor": enriched.get("vendor", ""),
+                "product_type": enriched.get("productType", ""),
+                "first_sku": (_variants[0].get("sku", "") if _variants else ""),
+                "first_variant_sku": (_variants[0].get("sku", "") if _variants else ""),
+                "brand_product_id": get_metafield(metafields, "custom", "brand_product_id") or "",
+                "gender": get_metafield(metafields, "custom", "gender") or "",
+                "color": get_metafield(metafields, "custom", "color") or "",
+                "variant_ids": [str(v.get("id", "")).split("/")[-1] for v in _variants if v.get("id")],
+                "variant_skus": [v.get("sku", "") for v in _variants if v.get("sku")],
+            }
+            resolved = _resolve_bpid_template(bpid_override_raw, bpid_product)
+            if resolved:
+                _patch_metafield(metafields, "custom", "brand_product_id", resolved)
+
         price_ov = cfg.get("price_overrides", {}).get(str(product_id))
         if price_ov:
             if price_ov.get("type") == "fixed":
@@ -2060,6 +2095,27 @@ def api_vendor_overrides_put():
         return jsonify({"error": "Expected a JSON object"}), 400
     cfg = load_config()
     cfg["vendor_overrides"] = data
+    save_config(cfg)
+    return jsonify({"ok": True})
+
+
+# -----------------------------------------------------------------------
+# Brand Product ID Overrides API — per-product value or template
+# -----------------------------------------------------------------------
+
+@dashboard_bp.route("/api/brand-product-id-overrides")
+def api_brand_product_id_overrides_get():
+    cfg = load_config()
+    return jsonify(cfg.get("brand_product_id_overrides", {}))
+
+
+@dashboard_bp.route("/api/brand-product-id-overrides", methods=["PUT"])
+def api_brand_product_id_overrides_put():
+    data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected a JSON object"}), 400
+    cfg = load_config()
+    cfg["brand_product_id_overrides"] = data
     save_config(cfg)
     return jsonify({"ok": True})
 
@@ -2467,15 +2523,8 @@ def api_delete_all_published():
     def generate():
         # Step 1: Reset ALL pipeline logs
         clients = _get_clients()
-        pipeline_dir = clients["pipeline"].log_dir
-        pattern = os.path.join(pipeline_dir, "*", "*.json")
-        reset_count = 0
-        for fpath in glob.glob(pattern):
-            try:
-                os.remove(fpath)
-                reset_count += 1
-            except OSError:
-                continue
+        pipeline = clients["pipeline"]
+        reset_count = pipeline.reset_all_jobs()
         yield json.dumps({"type": "reset", "count": reset_count}) + "\n"
 
         # Step 2: Delete all from portal
@@ -2560,22 +2609,7 @@ def api_events():
         if status:
             events = tx_logger.get_by_status(status, date=date)
         else:
-            # Get all events for the date (or all dates)
-            all_events = []
-            log_dir = tx_logger.log_dir
-            if date:
-                pattern = os.path.join(log_dir, date, "*.json")
-            else:
-                pattern = os.path.join(log_dir, "*", "*.json")
-
-            for fpath in sorted(glob.glob(pattern), reverse=True)[:200]:
-                try:
-                    with open(fpath, "r", encoding="utf-8") as f:
-                        record = json.load(f)
-                    all_events.append({"file": fpath, "record": record})
-                except (json.JSONDecodeError, OSError):
-                    continue
-            events = all_events
+            events = tx_logger.get_recent(limit=200, date=date)
 
         # Simplify for API response
         simplified = []
@@ -2671,20 +2705,7 @@ def api_pipeline_jobs():
         if status:
             jobs = pipeline.get_jobs_by_status(status, date=date)
         else:
-            pipeline_dir = pipeline.log_dir
-            if date:
-                pattern = os.path.join(pipeline_dir, date, "*.json")
-            else:
-                pattern = os.path.join(pipeline_dir, "*", "*.json")
-
-            jobs = []
-            for fpath in sorted(glob.glob(pattern), reverse=True)[:200]:
-                try:
-                    with open(fpath, "r", encoding="utf-8") as f:
-                        record = json.load(f)
-                    jobs.append({"file": fpath, "record": record})
-                except (json.JSONDecodeError, OSError):
-                    continue
+            jobs = pipeline.get_recent_jobs(limit=200, date=date)
 
         simplified = []
         for j in jobs:

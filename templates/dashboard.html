@@ -365,6 +365,7 @@
       <option value="price">Price overridden</option>
       <option value="category">Category overridden</option>
       <option value="size_field">Size field overridden</option>
+      <option value="brand_product_id">Brand Product ID overridden</option>
     </select>
     <button class="btn btn-primary" onclick="loadPublished(true)">Refresh</button>
     <button class="btn btn-success" id="sync-selected-btn" onclick="syncSelectedProducts()" disabled>Sync Selected (<span id="sync-selected-count">0</span>)</button>
@@ -849,7 +850,7 @@
         <div id="img-crop-overlay" style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;cursor:crosshair;"></div>
       </div>
       <div id="img-crop-actions" style="display:none;margin-top:8px;display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;">
-        <select id="crop-aspect-ratio" onchange="_cropAspectRatio=this.value" style="padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;">
+        <select id="crop-aspect-ratio" onchange="_cropAspectRatio=this.value;if(_imgEdCropRect){_imgEdCropRect=_constrainRectToAspect(_imgEdCropRect,_cropAspectRatio);imgEdRedraw()}" style="padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;">
           <option value="free">Free</option>
           <option value="1:1">1:1 Square</option>
           <option value="4:3">4:3</option>
@@ -1487,13 +1488,14 @@ function filterPublished() {
       if (fLive !== ls) return false;
     }
     if (fOverride) {
-      const hasAny = p.title_overridden || p.vendor_overridden || p.price_overridden || p.category_overridden || p.size_field_overridden;
+      const hasAny = p.title_overridden || p.vendor_overridden || p.price_overridden || p.category_overridden || p.size_field_overridden || p.brand_product_id_overridden;
       if (fOverride === 'any' && !hasAny) return false;
       if (fOverride === 'title' && !p.title_overridden) return false;
       if (fOverride === 'vendor' && !p.vendor_overridden) return false;
       if (fOverride === 'price' && !p.price_overridden) return false;
       if (fOverride === 'category' && !p.category_overridden) return false;
       if (fOverride === 'size_field' && !p.size_field_overridden) return false;
+      if (fOverride === 'brand_product_id' && !p.brand_product_id_overridden) return false;
     }
     return true;
   });
@@ -2171,10 +2173,14 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
     const titleStar = p.title_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Title overridden">&#9733;</span>' : '';
     const vendorStar = p.vendor_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Vendor overridden">&#9733;</span>' : '';
     const priceStar = p.price_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Price overridden">&#9733;</span>' : '';
+    const bpidStar = p.brand_product_id_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Brand Product ID overridden">&#9733;</span>' : '';
+    const bpidDisplay = p.brand_product_id
+      ? `<span style="font-size:11px;color:var(--text-muted);cursor:pointer;text-decoration:underline dotted;" onclick="event.stopPropagation();editBrandProductId(${p.id}, this)">BPID: ${esc(p.brand_product_id)}${bpidStar}</span>`
+      : `<span style="font-size:11px;color:var(--warning);cursor:pointer;text-decoration:underline dotted;" onclick="event.stopPropagation();editBrandProductId(${p.id}, this)">+ Add BPID${bpidStar}</span>`;
 
     return `<tr>
       ${chkCol}<td>${img}</td>
-      <td style="white-space:normal;min-width:200px"><span style="cursor:pointer;text-decoration:underline dotted;" onclick="editTitle(${p.id}, this)"><strong>${esc(p.title)}</strong>${titleStar}</span> <a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:var(--text-muted);font-size:11px;">&#8599;</a><br><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="font-size:11px;color:var(--text-muted);text-decoration:none;">ID: ${p.id}</a></td>
+      <td style="white-space:normal;min-width:200px"><span style="cursor:pointer;text-decoration:underline dotted;" onclick="editTitle(${p.id}, this)"><strong>${esc(p.title)}</strong>${titleStar}</span> <a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:var(--text-muted);font-size:11px;">&#8599;</a><br><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="font-size:11px;color:var(--text-muted);text-decoration:none;">ID: ${p.id}</a> ${bpidDisplay}</td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editVendor(${p.id}, this)">${esc(p.vendor)}${vendorStar}${vendorFavBtn}</td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editCategory(${p.id}, '${esc(p.bluefly_category || '')}')">
         <span class="cat-cell" data-catid="${esc(p.bluefly_category || '')}">${esc(p.bluefly_category || '-')}</span>${p.category_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Category overridden">&#9733;</span>' : ''}${favBtn}
@@ -2246,11 +2252,15 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
     const titleStar = p.title_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Title overridden">&#9733;</span>' : '';
     const vendorStar = p.vendor_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Vendor overridden">&#9733;</span>' : '';
     const priceStar = p.price_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Price overridden">&#9733;</span>' : '';
+    const bpidStar = p.brand_product_id_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Brand Product ID overridden">&#9733;</span>' : '';
+    const bpidDisplay = p.brand_product_id
+      ? `<span style="font-size:11px;color:var(--text-muted);cursor:pointer;text-decoration:underline dotted;" onclick="event.stopPropagation();editBrandProductId(${p.id}, this)">BPID: ${esc(p.brand_product_id)}${bpidStar}</span>`
+      : `<span style="font-size:11px;color:var(--warning);cursor:pointer;text-decoration:underline dotted;" onclick="event.stopPropagation();editBrandProductId(${p.id}, this)">+ Add BPID${bpidStar}</span>`;
 
     return `<tr>
       <td>${chk}</td>
       <td>${img}</td>
-      <td style="white-space:normal;min-width:200px"><span style="cursor:pointer;text-decoration:underline dotted;" onclick="editTitle(${p.id}, this)"><strong>${esc(p.title)}</strong>${titleStar}</span> <a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:var(--text-muted);font-size:11px;">&#8599;</a><br><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="font-size:11px;color:var(--text-muted);text-decoration:none;">ID: ${p.id}</a></td>
+      <td style="white-space:normal;min-width:200px"><span style="cursor:pointer;text-decoration:underline dotted;" onclick="editTitle(${p.id}, this)"><strong>${esc(p.title)}</strong>${titleStar}</span> <a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:var(--text-muted);font-size:11px;">&#8599;</a><br><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="font-size:11px;color:var(--text-muted);text-decoration:none;">ID: ${p.id}</a> ${bpidDisplay}</td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editVendor(${p.id}, this)">${esc(p.vendor)}${vendorStar}${vendorFavBtn}</td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editCategory(${p.id}, '${esc(p.bluefly_category || '')}')">
         <span class="cat-cell" data-catid="${esc(p.bluefly_category || '')}">${esc(p.bluefly_category || '-')}</span>${p.category_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Category overridden">&#9733;</span>' : ''}${favBtn}
@@ -2528,6 +2538,122 @@ function editVendor(productId, cellEl) {
     }).then(() => {
       overlay.remove();
       toast('Vendor override removed');
+      _unpublishedLoaded = false;
+      _publishedLoaded = false;
+      const pubTab = document.getElementById('tab-published');
+      if (pubTab && pubTab.classList.contains('active')) loadPublished(true);
+      else loadUnpublished(true);
+    });
+  });
+}
+
+// ---- Brand Product ID override editor ----
+function editBrandProductId(productId, cellEl) {
+  const product = [..._allUnpublishedProducts, ..._allPublishedProducts].find(p => p.id === productId);
+  const current = product ? (product.brand_product_id || '') : '';
+  const templateVal = product && product.brand_product_id_template ? product.brand_product_id_template : '';
+  const placeholders = ['{first_variant_sku}', '{first_sku}', '{vendor}', '{product_type}', '{gender}', '{color}', '{title}', '{id}', '{variant_ids}', '{variant_skus}'];
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:600px;width:90%;">
+      <h4>Edit Brand Product ID</h4>
+      <div class="modal-subtitle">Product ${productId}</div>
+      <div style="margin-bottom:8px;font-size:12px;color:var(--text-muted);">
+        Current Shopify value: <strong>${esc(product && product.brand_product_id && !product.brand_product_id_overridden ? product.brand_product_id : '(none)')}</strong>
+      </div>
+      <input type="text" id="bpid-override-input" value="${esc(templateVal || current)}" placeholder="Enter value or template like {first_sku}">
+      <div style="margin:8px 0;font-size:12px;color:var(--text-muted);">
+        Use <code>{field}</code> placeholders for dynamic values:
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px;">
+        ${placeholders.map(ph =>
+          `<button class="modal-btn modal-btn-cancel" style="font-size:11px;padding:4px 10px;border-radius:6px;"
+                   onclick="document.getElementById('bpid-override-input').value += '${ph}'; document.getElementById('bpid-override-input').dispatchEvent(new Event('input'))">${ph}</button>`
+        ).join('')}
+      </div>
+      <div id="bpid-preview" style="padding:8px 12px;background:var(--surface2);border-radius:6px;font-size:12px;margin-bottom:12px;"></div>
+      <details style="margin-bottom:12px;">
+        <summary style="cursor:pointer;font-size:12px;color:var(--text-muted);user-select:none;">Show variants (${product && product.variants_detail ? product.variants_detail.length : 0})</summary>
+        <div style="max-height:180px;overflow-y:auto;margin-top:6px;">
+          <table style="width:100%;font-size:11px;border-collapse:collapse;">
+            <thead><tr style="border-bottom:1px solid var(--border);text-align:left;">
+              <th style="padding:4px 6px;">Size</th>
+              <th style="padding:4px 6px;">SKU</th>
+              <th style="padding:4px 6px;">Variant ID</th>
+            </tr></thead>
+            <tbody>
+              ${(product && product.variants_detail ? product.variants_detail : []).map(v => `<tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 6px;">${esc(v.title || '-')}</td>
+                <td style="padding:4px 6px;"><a href="#" style="color:var(--primary);text-decoration:none;" onclick="event.preventDefault();document.getElementById('bpid-override-input').value='${esc(v.sku)}';document.getElementById('bpid-override-input').dispatchEvent(new Event('input'))">${esc(v.sku || '-')}</a></td>
+                <td style="padding:4px 6px;font-size:10px;color:var(--text-muted);">${esc(v.id || '-')}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </details>
+      <div class="modal-actions">
+        <button class="modal-btn modal-btn-primary" id="bpid-save-btn">Save</button>
+        <div class="modal-actions-right">
+          <button class="modal-btn modal-btn-danger" id="bpid-remove-btn">Remove</button>
+          <button class="modal-btn modal-btn-cancel" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  const input = document.getElementById('bpid-override-input');
+  input.focus();
+  input.select();
+
+  function updatePreview() {
+    const val = input.value;
+    const previewEl = document.getElementById('bpid-preview');
+    if (!val) { previewEl.innerHTML = '<span style="color:var(--text-muted)">No override</span>'; return; }
+    const resolved = val.replace(/\{(\w+)\}/g, (m, key) => {
+      const v = product ? product[key] : null;
+      if (v == null) return '';
+      if (Array.isArray(v)) return v.join(',');
+      return String(v);
+    });
+    const isFormula = val.includes('{');
+    previewEl.innerHTML = `<strong>Preview:</strong> ${esc(resolved)}` + (isFormula ? ' <span style="color:var(--text-muted)">(template)</span>' : '');
+  }
+  input.addEventListener('input', updatePreview);
+  updatePreview();
+
+  document.getElementById('bpid-save-btn').addEventListener('click', () => {
+    const val = input.value.trim();
+    if (!val) return;
+    fetch('/api/brand-product-id-overrides').then(r => r.json()).then(overrides => {
+      overrides[String(productId)] = val;
+      return fetch('/api/brand-product-id-overrides', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(overrides) });
+    }).then(() => {
+      overlay.remove();
+      toast('Brand Product ID override saved');
+      const resolved = val.replace(/\{(\w+)\}/g, (m, key) => {
+        const v = product ? product[key] : null;
+        if (v == null) return '';
+        if (Array.isArray(v)) return v.join(',');
+        return String(v);
+      });
+      const patch = { brand_product_id: resolved, brand_product_id_overridden: true, brand_product_id_template: val };
+      // Update in-memory and recalc eligibility so product becomes pushable immediately
+      for (const list of [_allUnpublishedProducts, _allPublishedProducts]) {
+        const pp = list.find(x => x.id === productId);
+        if (pp) { Object.assign(pp, patch); _recalcEligibility(pp); }
+      }
+      loadProducts(productId, patch);
+    });
+  });
+
+  document.getElementById('bpid-remove-btn').addEventListener('click', () => {
+    fetch('/api/brand-product-id-overrides').then(r => r.json()).then(overrides => {
+      delete overrides[String(productId)];
+      return fetch('/api/brand-product-id-overrides', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(overrides) });
+    }).then(() => {
+      overlay.remove();
+      toast('Brand Product ID override removed');
       _unpublishedLoaded = false;
       _publishedLoaded = false;
       const pubTab = document.getElementById('tab-published');
@@ -3731,6 +3857,15 @@ let _imgEdFlipH = false;
 let _imgEdFlipV = false;
 let _imgEdCropping = false;
 let _imgEdCropRect = null;      // {x, y, w, h} in canvas coords
+let _cropDragMode = null;       // 'move' | 'resize' | 'draw' | null
+let _cropActiveHandle = null;   // 'nw','n','ne','e','se','s','sw','w' | null
+let _cropDragStartX = 0;
+let _cropDragStartY = 0;
+let _cropOrigRect = null;       // snapshot of rect at drag start
+const CROP_HANDLE_SIZE = 10;    // hit-test half-size (canvas coords)
+const CROP_HANDLE_VISUAL = 6;   // drawn handle half-size (display px)
+const CROP_MIN_SIZE = 20;       // minimum crop dimension (canvas coords)
+const HANDLE_CURSORS = {nw:'nwse-resize',ne:'nesw-resize',se:'nwse-resize',sw:'nesw-resize',n:'ns-resize',s:'ns-resize',e:'ew-resize',w:'ew-resize'};
 
 async function openImgEditor(productId) {
   _imgEdProductId = productId;
@@ -3961,18 +4096,19 @@ async function removeImageOverride(index) {
 // ---- AI Image Generation ----
 
 let _genPreviewUrl = null; // Temporary R2 URL of generated image
+let _genLastPrompt = null; // Last prompt used for generation
 
 function showGenerateUI() {
   const bar = document.getElementById('img-action-bar');
   bar.innerHTML = `
     <div style="width:100%;padding:0 8px;">
       <div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap;justify-content:center;">
-        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Remove the background and place product on pure white" onclick="genShortcut('Remove the background, keep only the product on a pure white background')">Cutout</button>
-        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Clean white studio backdrop with soft shadows" onclick="genShortcut('Place this product on a clean white studio background with soft shadows')">Studio</button>
-        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Improve lighting, contrast and color balance" onclick="genShortcut('Enhance this product photo: improve lighting, contrast, and color balance for e-commerce')">Enhance</button>
-        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Style product in a natural lifestyle setting" onclick="genShortcut('Show this product from a lifestyle perspective, styled in a natural setting')">Lifestyle</button>
-        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Turn an iPhone photo into a pro e-commerce product shot" onclick="genShortcut('Transform this iPhone photo into a professional e-commerce product shot: clean white studio background, even soft lighting, remove reflections and shadows from phone camera, crisp product details, high-end commercial photography look')">Pro Shot</button>
-        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Generate additional angle views of the product" onclick="genShortcut('Generate a different angle view of this product for e-commerce: show the product from a new perspective (side, back, top-down, or three-quarter view), clean white studio background, professional product photography lighting, sharp detail')">Angles</button>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Isolate product on pure white background" onclick="genShortcut('Remove the background completely. Isolate the product on a pure white (#FFFFFF) seamless background. Preserve every edge detail, texture, and shadow. Output a clean, centered e-commerce packshot ready for listing.')">Cutout</button>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Professional studio with 3-point lighting" onclick="genShortcut('Place this product in a professional studio setting: seamless white or light grey background, three-point lighting with a soft key light, subtle fill, and gentle backlight rim. Soft natural shadows beneath the product. Sharp focus on product details, shallow depth of field on background. High-end commercial product photography, 4K quality.')">Studio</button>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Color-correct and sharpen for e-commerce" onclick="genShortcut('Enhance this product photo for e-commerce: correct white balance, boost contrast and clarity, sharpen product details, clean up any noise or artifacts, even out lighting across the product, make colors vibrant but true-to-life. Keep the composition and background unchanged. Professional color-graded look.')">Enhance</button>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Luxury editorial — product on a model in studio" onclick="genShortcut('Modern luxury product photography: show this product being worn or held by a model in a professional studio. Clean grey or white backdrop, soft diffused lighting, shallow depth of field. Editorial fashion style — minimal styling, neutral tones, the product is the hero. High-end campaign look, shot on medium format.')">Lifestyle</button>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Transform phone photo into pro product shot" onclick="genShortcut('Transform this into a professional e-commerce product shot: clean white seamless studio background, soft even lighting with no harsh shadows, remove any reflections or artifacts from phone camera, crisp product details with natural color accuracy, subtle shadow beneath for grounding. Commercial catalog photography quality.')">Pro Shot</button>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Generate a new angle of the product" onclick="genShortcut('Generate a new angle of this product: show it from a different perspective (three-quarter, side profile, slight overhead, or back view). Maintain the same product identity, colors, and details. Clean white studio background, professional product photography lighting, sharp detail throughout. The angle should reveal features not visible in the original shot.')">Angles</button>
       </div>
       <div style="display:flex;gap:6px;align-items:center;">
         <input type="text" id="gen-prompt" placeholder="Describe the image or use a shortcut above..." style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
@@ -3991,18 +4127,21 @@ function genShortcut(prompt) {
   submitGenerate();
 }
 
-async function submitGenerate() {
-  const prompt = document.getElementById('gen-prompt').value.trim();
+async function submitGenerate(opts) {
+  const promptEl = document.getElementById('gen-prompt');
+  const prompt = opts?.prompt || (promptEl ? promptEl.value.trim() : '') || '';
   if (!prompt) { toast('Enter a prompt', 'error'); return; }
+  _genLastPrompt = prompt;
 
   const bar = document.getElementById('img-action-bar');
   bar.innerHTML = '<span class="spinner"></span> <span style="font-size:13px;color:var(--text-muted);">Generating image...</span>';
 
+  const refImageUrl = opts?.refImage ?? (_imgEdImages[_imgEdSelected]?.effective_url || '');
   try {
     const resp = await fetch(`/api/products/${_imgEdProductId}/images/generate`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({prompt, image_url: _imgEdImages[_imgEdSelected]?.effective_url || ''})
+      body: JSON.stringify({prompt, image_url: refImageUrl})
     });
     // Response is streamed (spaces as keepalive, then JSON at end)
     const text = (await resp.text()).trim();
@@ -4016,12 +4155,22 @@ async function submitGenerate() {
     document.getElementById('img-preview-large').src = imgSrc(data.url);
     document.getElementById('img-info-bar').innerHTML = '<span style="color:var(--primary);font-weight:500;">AI Generated Preview</span>';
 
-    // Show accept/discard options with toggle
+    // Show accept/discard/rerun options
     bar.innerHTML = `
-      <button class="btn btn-outline btn-sm" onclick="toggleGenOriginal()">Show Original</button>
-      <button class="btn btn-primary btn-sm" onclick="acceptGenImage('replace')">Replace Current</button>
-      <button class="btn btn-outline btn-sm" onclick="acceptGenImage('add')">Add as New</button>
-      <button class="btn btn-outline btn-sm" onclick="discardGenImage()">Discard</button>`;
+      <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;justify-content:center;width:100%;">
+        <button class="btn btn-outline btn-sm" onclick="toggleGenOriginal()">Show Original</button>
+        <button class="btn btn-primary btn-sm" onclick="acceptGenImage('replace')">Replace Current</button>
+        <button class="btn btn-outline btn-sm" onclick="acceptGenImage('add')">Add as New</button>
+        <button class="btn btn-outline btn-sm" onclick="rerunGenerate()">Rerun</button>
+        <button class="btn btn-outline btn-sm" onclick="discardGenImage()">Discard</button>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;width:100%;margin-top:6px;padding:0 8px;">
+        <input type="text" id="gen-refine-prompt" placeholder="Refine: add style or creative direction..." style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+        <button class="btn btn-outline btn-sm" onclick="rerunWithRefine()">Rerun with Note</button>
+      </div>`;
+    document.getElementById('gen-refine-prompt').addEventListener('keydown', e => {
+      if (e.key === 'Enter') rerunWithRefine();
+    });
   } catch (e) {
     toast('Error: ' + e.message, 'error');
     selectEditorImage(_imgEdSelected);
@@ -4051,11 +4200,13 @@ async function acceptGenImage(mode) {
       img.has_override = true;
       toast('Image replaced');
       _genPreviewUrl = null;
+      _genLastPrompt = null;
       selectEditorImage(_imgEdSelected);
     } else {
       // Add as new — re-fetch image list to include the new override
       toast('Image added');
       _genPreviewUrl = null;
+      _genLastPrompt = null;
       const listResp = await fetch(`/api/products/${_imgEdProductId}/images`);
       const listData = await listResp.json();
       if (listResp.ok) {
@@ -4069,6 +4220,7 @@ async function acceptGenImage(mode) {
   } catch (e) {
     toast('Error: ' + e.message, 'error');
     _genPreviewUrl = null;
+    _genLastPrompt = null;
     selectEditorImage(_imgEdSelected);
   }
 }
@@ -4091,9 +4243,22 @@ function toggleGenOriginal() {
   if (toggleBtn) toggleBtn.textContent = _genShowingOriginal ? 'Show Generated' : 'Show Original';
 }
 
+function rerunGenerate() {
+  if (!_genLastPrompt) return;
+  submitGenerate({prompt: _genLastPrompt});
+}
+
+function rerunWithRefine() {
+  const refine = document.getElementById('gen-refine-prompt')?.value.trim();
+  if (!refine) { toast('Enter a refinement note', 'error'); return; }
+  const combined = _genLastPrompt + '\n\nAdditional direction: ' + refine;
+  submitGenerate({prompt: combined, refImage: _genPreviewUrl || ''});
+}
+
 function discardGenImage() {
   _genPreviewUrl = null;
   _genShowingOriginal = false;
+  _genLastPrompt = null;
   selectEditorImage(_imgEdSelected);
 }
 
@@ -4125,6 +4290,21 @@ function enterEditMode(index) {
     _imgEdOriginalImg.src = '/api/image-proxy?url=' + encodeURIComponent(img.effective_url);
   };
   _imgEdOriginalImg.src = img.effective_url;
+}
+
+function _imgEdRenderClean() {
+  const w = _imgEdOriginalImg.naturalWidth;
+  const h = _imgEdOriginalImg.naturalHeight;
+  const swapped = _imgEdRotation % 180 !== 0;
+  const c = document.createElement('canvas');
+  c.width = swapped ? h : w;
+  c.height = swapped ? w : h;
+  const ctx = c.getContext('2d');
+  ctx.translate(c.width / 2, c.height / 2);
+  ctx.rotate((_imgEdRotation * Math.PI) / 180);
+  ctx.scale(_imgEdFlipH ? -1 : 1, _imgEdFlipV ? -1 : 1);
+  ctx.drawImage(_imgEdOriginalImg, -w / 2, -h / 2);
+  return c;
 }
 
 function imgEdRedraw() {
@@ -4161,6 +4341,22 @@ function imgEdRedraw() {
     ctx.setLineDash([6, 3]);
     ctx.strokeRect(r.x, r.y, r.w, r.h);
     ctx.setLineDash([]);
+    // Draw 8 resize handles
+    const displayRect = canvas.getBoundingClientRect();
+    const hvx = CROP_HANDLE_VISUAL * (canvas.width / displayRect.width);
+    const hvy = CROP_HANDLE_VISUAL * (canvas.height / displayRect.height);
+    const handlePositions = [
+      {x: r.x, y: r.y}, {x: r.x+r.w/2, y: r.y}, {x: r.x+r.w, y: r.y},
+      {x: r.x+r.w, y: r.y+r.h/2}, {x: r.x+r.w, y: r.y+r.h},
+      {x: r.x+r.w/2, y: r.y+r.h}, {x: r.x, y: r.y+r.h}, {x: r.x, y: r.y+r.h/2}
+    ];
+    ctx.fillStyle = '#fff';
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    for (const pos of handlePositions) {
+      ctx.fillRect(pos.x - hvx, pos.y - hvy, hvx*2, hvy*2);
+      ctx.strokeRect(pos.x - hvx, pos.y - hvy, hvx*2, hvy*2);
+    }
   }
 }
 
@@ -4196,12 +4392,28 @@ function imgEdToggleCrop() {
     overlay.style.display = 'block';
     actions.style.display = 'flex';
     btn.classList.add('btn-primary');
-    _imgEdCropRect = null;
     _cropAspectRatio = 'free';
     document.getElementById('crop-aspect-ratio').value = 'free';
+    // Initialize default 80% centered crop rectangle
+    const canvas = document.getElementById('img-edit-canvas');
+    const margin = 0.1;
+    _imgEdCropRect = {
+      x: Math.round(canvas.width * margin),
+      y: Math.round(canvas.height * margin),
+      w: Math.round(canvas.width * (1 - 2 * margin)),
+      h: Math.round(canvas.height * (1 - 2 * margin))
+    };
+    imgEdRedraw();
     // Set up mouse handlers
-    overlay.onmousedown = imgEdCropStart;
+    overlay.onmousedown = imgEdCropPointerDown;
     overlay.ontouchstart = imgEdCropTouchStart;
+    overlay.onmousemove = (e) => {
+      if (_cropDragMode) return;
+      const rect = canvas.getBoundingClientRect();
+      const cx = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const cy = (e.clientY - rect.top) * (canvas.height / rect.height);
+      _updateOverlayCursor(_cropHitTest(cx, cy));
+    };
   } else {
     imgEdCancelCrop();
   }
@@ -4234,48 +4446,195 @@ function _constrainCrop(startX, startY, cx, cy) {
   };
 }
 
-function imgEdCropStart(e) {
+function _normalizeRect(r) {
+  return {
+    x: r.w < 0 ? r.x + r.w : r.x,
+    y: r.h < 0 ? r.y + r.h : r.y,
+    w: Math.abs(r.w),
+    h: Math.abs(r.h)
+  };
+}
+
+function _constrainRectToAspect(rect, aspectStr) {
+  if (aspectStr === 'free') return rect;
+  const [aw, ah] = aspectStr.split(':').map(Number);
+  const ratio = aw / ah;
+  let {x, y, w, h} = rect;
+  if (w / h > ratio) {
+    const newW = h * ratio;
+    x += (w - newW) / 2;
+    w = newW;
+  } else {
+    const newH = w / ratio;
+    y += (h - newH) / 2;
+    h = newH;
+  }
+  return {x, y, w, h};
+}
+
+function _cropHitTest(cx, cy) {
+  if (!_imgEdCropRect || _imgEdCropRect.w < 5) return {type: 'draw'};
+  const r = _imgEdCropRect;
+  const canvas = document.getElementById('img-edit-canvas');
+  const displayRect = canvas.getBoundingClientRect();
+  const hsx = CROP_HANDLE_SIZE * (canvas.width / displayRect.width);
+  const hsy = CROP_HANDLE_SIZE * (canvas.height / displayRect.height);
+  const handles = {
+    nw: {x: r.x, y: r.y},
+    n:  {x: r.x + r.w/2, y: r.y},
+    ne: {x: r.x + r.w, y: r.y},
+    e:  {x: r.x + r.w, y: r.y + r.h/2},
+    se: {x: r.x + r.w, y: r.y + r.h},
+    s:  {x: r.x + r.w/2, y: r.y + r.h},
+    sw: {x: r.x, y: r.y + r.h},
+    w:  {x: r.x, y: r.y + r.h/2},
+  };
+  for (const [name, pos] of Object.entries(handles)) {
+    if (Math.abs(cx - pos.x) <= hsx && Math.abs(cy - pos.y) <= hsy) {
+      return {type: 'handle', handle: name};
+    }
+  }
+  if (cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h) {
+    return {type: 'move'};
+  }
+  return {type: 'draw'};
+}
+
+function _updateOverlayCursor(hit) {
+  const overlay = document.getElementById('img-crop-overlay');
+  if (hit.type === 'handle') overlay.style.cursor = HANDLE_CURSORS[hit.handle];
+  else if (hit.type === 'move') overlay.style.cursor = 'move';
+  else overlay.style.cursor = 'crosshair';
+}
+
+function _cropResize(mx, my, canvas) {
+  const o = _cropOrigRect;
+  let x1 = o.x, y1 = o.y, x2 = o.x + o.w, y2 = o.y + o.h;
+  const h = _cropActiveHandle;
+  const movesLeft = h.includes('w'), movesRight = h.includes('e');
+  const movesTop = h.includes('n'), movesBottom = h.includes('s');
+
+  if (movesLeft)   x1 = Math.max(0, Math.min(mx, x2 - CROP_MIN_SIZE));
+  if (movesRight)  x2 = Math.min(canvas.width, Math.max(mx, x1 + CROP_MIN_SIZE));
+  if (movesTop)    y1 = Math.max(0, Math.min(my, y2 - CROP_MIN_SIZE));
+  if (movesBottom) y2 = Math.min(canvas.height, Math.max(my, y1 + CROP_MIN_SIZE));
+
+  let newW = x2 - x1, newH = y2 - y1;
+
+  if (_cropAspectRatio !== 'free') {
+    const [aw, ah] = _cropAspectRatio.split(':').map(Number);
+    const ratio = aw / ah;
+    if (h === 'n' || h === 's') {
+      newW = newH * ratio;
+      const centerX = o.x + o.w / 2;
+      x1 = centerX - newW / 2; x2 = centerX + newW / 2;
+    } else if (h === 'e' || h === 'w') {
+      newH = newW / ratio;
+      const centerY = o.y + o.h / 2;
+      y1 = centerY - newH / 2; y2 = centerY + newH / 2;
+    } else {
+      if (newW / newH > ratio) newW = newH * ratio;
+      else newH = newW / ratio;
+      if (movesLeft) x1 = x2 - newW; else x2 = x1 + newW;
+      if (movesTop) y1 = y2 - newH; else y2 = y1 + newH;
+    }
+  }
+
+  x1 = Math.max(0, x1); y1 = Math.max(0, y1);
+  x2 = Math.min(canvas.width, x2); y2 = Math.min(canvas.height, y2);
+  _imgEdCropRect = {x: x1, y: y1, w: x2 - x1, h: y2 - y1};
+}
+
+function _cropPointerMove(mx, my, canvas) {
+  const dx = mx - _cropDragStartX, dy = my - _cropDragStartY;
+  if (_cropDragMode === 'draw') {
+    _imgEdCropRect = _constrainCrop(_cropStartX, _cropStartY, mx, my);
+  } else if (_cropDragMode === 'move') {
+    let newX = Math.max(0, Math.min(_cropOrigRect.x + dx, canvas.width - _cropOrigRect.w));
+    let newY = Math.max(0, Math.min(_cropOrigRect.y + dy, canvas.height - _cropOrigRect.h));
+    _imgEdCropRect = {x: newX, y: newY, w: _cropOrigRect.w, h: _cropOrigRect.h};
+  } else if (_cropDragMode === 'resize') {
+    _cropResize(mx, my, canvas);
+  }
+}
+
+function imgEdCropPointerDown(e) {
   e.preventDefault();
   const canvas = document.getElementById('img-edit-canvas');
   const rect = canvas.getBoundingClientRect();
   const scaleX = canvas.width / rect.width;
   const scaleY = canvas.height / rect.height;
-  _cropStartX = (e.clientX - rect.left) * scaleX;
-  _cropStartY = (e.clientY - rect.top) * scaleY;
-  _imgEdCropRect = {x: _cropStartX, y: _cropStartY, w: 0, h: 0};
+  const cx = (e.clientX - rect.left) * scaleX;
+  const cy = (e.clientY - rect.top) * scaleY;
+
+  const hit = _cropHitTest(cx, cy);
+  _cropDragStartX = cx; _cropDragStartY = cy;
+  _cropOrigRect = _imgEdCropRect ? {..._imgEdCropRect} : null;
+
+  if (hit.type === 'handle') {
+    _cropDragMode = 'resize';
+    _cropActiveHandle = hit.handle;
+  } else if (hit.type === 'move') {
+    _cropDragMode = 'move';
+    _cropActiveHandle = null;
+  } else {
+    _cropDragMode = 'draw';
+    _cropActiveHandle = null;
+    _cropStartX = cx; _cropStartY = cy;
+    _imgEdCropRect = {x: cx, y: cy, w: 0, h: 0};
+  }
+  _updateOverlayCursor(hit);
 
   const onMove = (me) => {
-    const cx = (me.clientX - rect.left) * scaleX;
-    const cy = (me.clientY - rect.top) * scaleY;
-    _imgEdCropRect = _constrainCrop(_cropStartX, _cropStartY, cx, cy);
+    const mx = (me.clientX - rect.left) * scaleX;
+    const my = (me.clientY - rect.top) * scaleY;
+    _cropPointerMove(mx, my, canvas);
     imgEdRedraw();
   };
   const onUp = () => {
+    _cropDragMode = null; _cropActiveHandle = null;
+    if (_imgEdCropRect) _imgEdCropRect = _normalizeRect(_imgEdCropRect);
+    if (_imgEdCropRect && (_imgEdCropRect.w < CROP_MIN_SIZE || _imgEdCropRect.h < CROP_MIN_SIZE)) {
+      _imgEdCropRect = _cropOrigRect;
+    }
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
+    imgEdRedraw();
   };
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
 }
 
 function imgEdCropTouchStart(e) {
+  e.preventDefault();
   if (!e.touches.length) return;
   const touch = e.touches[0];
-  imgEdCropStart({preventDefault:()=>{}, clientX: touch.clientX, clientY: touch.clientY});
-  const overlay = document.getElementById('img-crop-overlay');
   const canvas = document.getElementById('img-edit-canvas');
   const rect = canvas.getBoundingClientRect();
   const scaleX = canvas.width / rect.width;
   const scaleY = canvas.height / rect.height;
+
+  imgEdCropPointerDown({preventDefault:()=>{}, clientX: touch.clientX, clientY: touch.clientY});
+
+  const overlay = document.getElementById('img-crop-overlay');
   overlay.ontouchmove = (te) => {
+    te.preventDefault();
     if (!te.touches.length) return;
     const t = te.touches[0];
-    const cx = (t.clientX - rect.left) * scaleX;
-    const cy = (t.clientY - rect.top) * scaleY;
-    _imgEdCropRect = _constrainCrop(_cropStartX, _cropStartY, cx, cy);
+    const mx = (t.clientX - rect.left) * scaleX;
+    const my = (t.clientY - rect.top) * scaleY;
+    _cropPointerMove(mx, my, canvas);
     imgEdRedraw();
   };
-  overlay.ontouchend = () => { overlay.ontouchmove = null; overlay.ontouchend = null; };
+  overlay.ontouchend = () => {
+    _cropDragMode = null; _cropActiveHandle = null;
+    if (_imgEdCropRect) _imgEdCropRect = _normalizeRect(_imgEdCropRect);
+    if (_imgEdCropRect && (_imgEdCropRect.w < CROP_MIN_SIZE || _imgEdCropRect.h < CROP_MIN_SIZE)) {
+      _imgEdCropRect = _cropOrigRect;
+    }
+    overlay.ontouchmove = null; overlay.ontouchend = null;
+    imgEdRedraw();
+  };
 }
 
 function imgEdApplyCrop() {
@@ -4283,10 +4642,12 @@ function imgEdApplyCrop() {
     toast('Select a crop area first', 'error');
     return;
   }
+  const r = _imgEdCropRect;
+  // Use off-screen canvas to get clean pixels (no crop overlay)
+  const clean = _imgEdRenderClean();
+  const cropped = clean.getContext('2d').getImageData(r.x, r.y, r.w, r.h);
   const canvas = document.getElementById('img-edit-canvas');
   const ctx = canvas.getContext('2d');
-  const r = _imgEdCropRect;
-  const cropped = ctx.getImageData(r.x, r.y, r.w, r.h);
   canvas.width = r.w;
   canvas.height = r.h;
   ctx.putImageData(cropped, 0, 0);
@@ -4322,8 +4683,9 @@ function imgEdCancelCrop() {
 }
 
 async function imgEdSave() {
-  const canvas = document.getElementById('img-edit-canvas');
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+  // Use off-screen canvas to get clean pixels (no crop overlay)
+  const clean = _imgEdRenderClean();
+  const dataUrl = clean.toDataURL('image/jpeg', 0.92);
   const img = _imgEdImages[_imgEdSelected];
   if (!img) return;
 
