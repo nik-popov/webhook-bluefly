@@ -122,7 +122,7 @@
     text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border);
     background: #f9fafb; white-space: nowrap;
   }
-  td { padding: 10px 16px; font-size: 13px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
+  td { padding: 10px 16px; font-size: 12px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
   tr:last-child td { border-bottom: none; }
   tr:hover { background: #f9fafb; }
   .badge {
@@ -161,6 +161,12 @@
   .sort-arrow:not(.asc):not(.desc)::after { content: '\21C5'; }
   .filter-row th { padding: 4px 6px !important; background: #f8fafc; }
   .col-filter { font-size: 11px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; max-width: 130px; width: 100%; background: #fff; }
+  .multi-dropdown { position: relative; display: inline-block; width: 100%; }
+  .multi-dropdown-btn { font-size:11px; padding:2px 4px; border:1px solid var(--border); border-radius:4px; max-width:130px; width:100%; background:#fff; cursor:pointer; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.4; }
+  .multi-dropdown-list { display:none; position:absolute; z-index:100; background:#fff; border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.12); padding:4px 0; min-width:150px; max-height:220px; overflow-y:auto; right:0; }
+  .multi-dropdown.open .multi-dropdown-list { display:block; }
+  .multi-dropdown-list label { display:block; padding:3px 10px; font-size:11px; cursor:pointer; white-space:nowrap; }
+  .multi-dropdown-list label:hover { background:#f3f4f6; }
   .fav-btn { cursor: pointer; border: none; background: none; font-size: 16px; padding: 0 2px; vertical-align: middle; line-height: 1; }
   .fav-btn:hover { transform: scale(1.2); }
   .prod-img { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; background: #f3f4f6; }
@@ -313,10 +319,8 @@
 <!-- ============ TAB: Products ============ -->
 <div id="tab-published" class="tab-content">
   <div id="published-error" class="error-banner"></div>
-  <h3 style="margin:0 0 12px;">Published to Bluefly&nbsp;<span class="count" id="published-count">0</span>
-    <span style="font-weight:400;font-size:12px;color:var(--text-muted);margin-left:6px;">·&nbsp;<span id="catalog-matched-count">0</span> live</span>
-  </h3>
   <div class="toolbar" style="margin-bottom:12px;">
+    <span style="font-size:13px;font-weight:600;"><span class="count" id="published-count">0</span> published &middot; <span id="catalog-matched-count">0</span> live</span>
     <input type="text" id="pub-search" placeholder="Search published…" style="min-width:240px;" oninput="filterPublished()">
     <select id="pub-status-filter" onchange="filterPublished()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
       <option value="">All statuses</option>
@@ -379,13 +383,13 @@
 
 <div id="tab-unpublished" class="tab-content">
   <div id="unpublished-error" class="error-banner"></div>
-  <h3 style="margin:0 0 12px;">Not Published&nbsp;<span class="count" id="unpublished-count">0</span></h3>
   <div id="bulk-progress" style="display:none;">
     <div class="progress-bar"><div class="fill" id="bulk-fill" style="width:0%"></div></div>
     <div id="bulk-status" style="font-size:13px; color:var(--text-muted); margin-bottom:12px;"></div>
   </div>
   <div id="bulk-log" class="stream-log"></div>
   <div class="toolbar" style="margin-bottom:12px;">
+    <span style="font-size:13px;font-weight:600;"><span class="count" id="unpublished-count">0</span> not published</span>
     <input type="text" id="unpub-search" placeholder="Search not published…" style="min-width:240px;" oninput="filterUnpublished()">
     <select id="unpub-reason-filter" onchange="filterUnpublished()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
       <option value="">All products</option>
@@ -423,7 +427,20 @@
           <th><select id="unpub-filter-vendor" class="col-filter" onchange="filterUnpublished()"><option value="">All</option></select></th>
           <th><select id="unpub-filter-category" class="col-filter" onchange="filterUnpublished()"><option value="">All</option></select></th>
           <th></th><th></th><th></th><th></th>
-          <th><select id="unpub-filter-eligible" class="col-filter" onchange="filterUnpublished()"><option value="">All</option><option value="no-category">No category</option><option value="default-variants">Default size only</option><option value="no-images">No images</option><option value="bad-image">Bad image format</option><option value="no-qty">Qty = 0</option><option value="no-brand-id">No brand ID</option></select></th>
+          <th><div class="multi-dropdown" id="eligible-dropdown">
+            <button type="button" class="multi-dropdown-btn" onclick="this.parentElement.classList.toggle('open')">All</button>
+            <div class="multi-dropdown-list">
+              <label><input type="checkbox" value="no-category" onchange="onEligibleFilterChange()"> No category</label>
+              <label><input type="checkbox" value="has-category" onchange="onEligibleFilterChange()"> Has category</label>
+              <label><input type="checkbox" value="default-variants" onchange="onEligibleFilterChange()"> Default size only</label>
+              <label><input type="checkbox" value="no-images" onchange="onEligibleFilterChange()"> No images</label>
+              <label><input type="checkbox" value="bad-image" onchange="onEligibleFilterChange()"> Bad image format</label>
+              <label><input type="checkbox" value="no-qty" onchange="onEligibleFilterChange()"> Qty = 0</label>
+              <label><input type="checkbox" value="has-qty" onchange="onEligibleFilterChange()"> Qty &gt; 0</label>
+              <label><input type="checkbox" value="no-brand-id" onchange="onEligibleFilterChange()"> No brand ID</label>
+              <label><input type="checkbox" value="has-brand-id" onchange="onEligibleFilterChange()"> Has brand ID</label>
+            </div>
+          </div></th>
           <th><select id="unpub-filter-action" class="col-filter" onchange="filterUnpublished()"><option value="">All</option><option value="ready">Ready</option><option value="not-ready">Not ready</option></select></th>
         </tr>
       </thead>
@@ -1361,7 +1378,7 @@ function filterUnpublished() {
   const reason = document.getElementById('unpub-reason-filter').value;
   const fVendor = _getColFilter('unpub-filter-vendor');
   const fCategory = _getColFilter('unpub-filter-category');
-  const fEligible = _getColFilter('unpub-filter-eligible');
+  const fEligible = [...document.querySelectorAll('#eligible-dropdown input:checked')].map(c => c.value);
   const fAction = _getColFilter('unpub-filter-action');
   _unpublishedProducts = _allUnpublishedProducts.filter(p => {
     if (q && !_matchesSearch(p, q)) return false;
@@ -1374,12 +1391,17 @@ function filterUnpublished() {
     if (reason === 'no-brand-id' && p.brand_product_id) return false;
     if (fVendor && p.vendor !== fVendor) return false;
     if (fCategory && (p.bluefly_category || '') !== fCategory) return false;
-    if (fEligible === 'no-category' && p.bluefly_category) return false;
-    if (fEligible === 'default-variants' && !p.has_default_variants) return false;
-    if (fEligible === 'no-images' && p.has_images) return false;
-    if (fEligible === 'bad-image' && !(p.has_images && !p.valid_image_format)) return false;
-    if (fEligible === 'no-qty' && p.has_quantity) return false;
-    if (fEligible === 'no-brand-id' && p.brand_product_id) return false;
+    for (const f of fEligible) {
+      if (f === 'no-category' && p.bluefly_category) return false;
+      if (f === 'has-category' && !p.bluefly_category) return false;
+      if (f === 'default-variants' && !p.has_default_variants) return false;
+      if (f === 'no-images' && p.has_images) return false;
+      if (f === 'bad-image' && !(p.has_images && !p.valid_image_format)) return false;
+      if (f === 'no-qty' && p.has_quantity) return false;
+      if (f === 'has-qty' && !p.has_quantity) return false;
+      if (f === 'no-brand-id' && p.brand_product_id) return false;
+      if (f === 'has-brand-id' && !p.brand_product_id) return false;
+    }
     if (fAction === 'ready' && !p.push_eligible) return false;
     if (fAction === 'not-ready' && p.push_eligible) return false;
     return true;
@@ -1391,6 +1413,19 @@ function filterUnpublished() {
   _updateUnpublishedCounts();
   renderUnpublishedPage(1);
 }
+
+function onEligibleFilterChange() {
+  const checked = [...document.querySelectorAll('#eligible-dropdown input:checked')];
+  const btn = document.querySelector('#eligible-dropdown .multi-dropdown-btn');
+  btn.textContent = checked.length ? checked.length + ' selected' : 'All';
+  filterUnpublished();
+}
+
+document.addEventListener('click', function(e) {
+  document.querySelectorAll('.multi-dropdown.open').forEach(dd => {
+    if (!dd.contains(e.target)) dd.classList.remove('open');
+  });
+});
 
 function _populateSelect(id, values) {
   const el = document.getElementById(id);
