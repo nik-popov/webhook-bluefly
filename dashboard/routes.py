@@ -224,7 +224,8 @@ def api_product_images(product_id):
     image_overrides = cfg.get("image_overrides", {}).get(str(product_id), {})
 
     images = []
-    for i, img in enumerate(product.get("images", [])):
+    shopify_images = product.get("images", [])
+    for i, img in enumerate(shopify_images):
         url = img.get("url", "") if isinstance(img, dict) else str(img)
         override_url = image_overrides.get(str(i))
         effective_url = override_url or url
@@ -236,6 +237,19 @@ def api_product_images(product_id):
             "valid_format": _has_valid_image_format(effective_url),
             "has_override": bool(override_url),
         })
+
+    # Include override-only images (generated/added beyond Shopify count)
+    for idx_str, url in sorted(image_overrides.items(), key=lambda x: int(x[0])):
+        idx = int(idx_str)
+        if idx >= len(shopify_images):
+            images.append({
+                "index": idx,
+                "original_url": url,
+                "effective_url": url,
+                "alt_text": "",
+                "valid_format": _has_valid_image_format(url),
+                "has_override": True,
+            })
 
     return jsonify({"product_id": product_id, "images": images})
 
@@ -392,6 +406,136 @@ def api_image_upload(product_id):
                          "product_id": product_id, "image_index": image_index})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@dashboard_bp.route("/api/products/<int:product_id>/images/generate", methods=["POST"])
+def api_generate_image(product_id):
+    """Generate an image using Gemini API, upload to R2, return URL (no override yet)."""
+    import base64
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError
+
+    data = request.get_json(force=True)
+    prompt = (data.get("prompt") or "").strip()
+    image_url = (data.get("image_url") or "").strip()
+    if not prompt:
+        return jsonify({"error": "Prompt required"}), 400
+
+    cfg = load_config()
+    api_key = cfg.get("gemini_api_key", "")
+    if not api_key:
+        return jsonify({"error": "Gemini API key not configured. Add it in Settings."}), 400
+
+    import r2_client
+
+    # Stream the response so Cloudflare doesn't timeout
+    def generate():
+        # Send keepalive while working
+        yield " "
+
+        # Build parts: text + optional reference image
+        parts = [{"text": prompt}]
+        if image_url:
+            try:
+                print(f"[GenImage] Downloading source image: {image_url[:80]}")
+                img_req = Request(image_url, headers={"User-Agent": "Mozilla/5.0"})
+                img_resp = urlopen(img_req, timeout=15)
+                img_bytes = img_resp.read()
+                img_mime = img_resp.headers.get("Content-Type", "image/jpeg")
+                parts.insert(0, {
+                    "inlineData": {
+                        "mimeType": img_mime,
+                        "data": base64.b64encode(img_bytes).decode("ascii"),
+                    }
+                })
+                print(f"[GenImage] Source image downloaded: {len(img_bytes)} bytes")
+            except Exception as ex:
+                print(f"[GenImage] Source image download failed: {ex}")
+
+        yield " "
+
+        # Call Gemini image generation API
+        payload = json.dumps({
+            "contents": [{"parts": parts}],
+            "generationConfig": {
+                "responseModalities": ["TEXT", "IMAGE"],
+            },
+        }).encode("utf-8")
+
+        models_to_try = [
+            "gemini-3.1-flash-image-preview",
+            "gemini-3-pro-image-preview",
+            "gemini-2.5-flash-image",
+        ]
+        result = None
+        last_error = None
+
+        for gemini_model in models_to_try:
+            gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent"
+            print(f"[GenImage] Trying {gemini_model} prompt={prompt[:60]}")
+            yield " "
+
+            req = Request(
+                gemini_url,
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": api_key,
+                },
+                method="POST",
+            )
+
+            try:
+                resp = urlopen(req, timeout=120)
+                result = json.loads(resp.read().decode("utf-8"))
+                print(f"[GenImage] {gemini_model} responded OK")
+                break
+            except HTTPError as e:
+                body = e.read().decode("utf-8", errors="replace")
+                last_error = f"Gemini API error ({e.code}): {body[:300]}"
+                print(f"[GenImage] {gemini_model} error ({e.code}): {body[:200]}")
+                continue
+            except Exception as e:
+                last_error = f"Gemini request failed: {e}"
+                print(f"[GenImage] {gemini_model} failed: {e}")
+                continue
+
+        if result is None:
+            yield json.dumps({"error": last_error or "All Gemini models failed"})
+            return
+
+        # Extract base64 image from response
+        image_data = None
+        mime_type = "image/png"
+        for candidate in result.get("candidates", []):
+            for part in candidate.get("content", {}).get("parts", []):
+                inline = part.get("inlineData")
+                if inline and inline.get("data"):
+                    image_data = inline["data"]
+                    mime_type = inline.get("mimeType", "image/png")
+                    break
+            if image_data:
+                break
+
+        if not image_data:
+            print(f"[GenImage] No image in response: {json.dumps(result)[:200]}")
+            yield json.dumps({"error": "Gemini returned no image. Try a different prompt."})
+            return
+
+        # Upload to R2
+        try:
+            file_bytes = base64.b64decode(image_data)
+            ext = "png" if "png" in mime_type else "jpg"
+            timestamp = int(time.time())
+            key = f"images/{product_id}/gen_{timestamp}.{ext}"
+            resource_url = r2_client.upload(file_bytes, key, mime_type)
+            print(f"[GenImage] Uploaded to R2: {resource_url}")
+            yield json.dumps({"ok": True, "url": resource_url})
+        except Exception as e:
+            print(f"[GenImage] R2 upload failed: {e}")
+            yield json.dumps({"error": f"R2 upload failed: {e}"})
+
+    return Response(stream_with_context(generate()), mimetype="application/json")
 
 
 # -----------------------------------------------------------------------
@@ -2576,6 +2720,11 @@ def api_get_settings():
     cfg["log_dir"] = app_module.LOG_DIR
     cfg["pipeline_log_dir"] = app_module.PIPELINE_LOG_DIR
 
+    # Mask sensitive keys for frontend
+    if cfg.get("gemini_api_key"):
+        key = cfg["gemini_api_key"]
+        cfg["gemini_api_key"] = key[:4] + "..." + key[-4:] if len(key) > 8 else "***"
+
     return jsonify(cfg)
 
 
@@ -2611,6 +2760,10 @@ def api_update_settings():
     # Portal cookie
     if "portal_cookie" in data:
         cfg["portal_cookie"] = str(data["portal_cookie"])
+
+    # Gemini API key
+    if "gemini_api_key" in data:
+        cfg["gemini_api_key"] = str(data["gemini_api_key"])
 
     save_config(cfg)
     return jsonify({"success": True, "config": cfg})

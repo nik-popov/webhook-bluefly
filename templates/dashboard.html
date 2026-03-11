@@ -760,6 +760,16 @@
     </div>
     <p style="font-size:11px;color:var(--text-muted);margin-top:4px;">Copy from browser DevTools → Application → Cookies → connect.sid value</p>
   </div>
+
+  <div class="settings-group">
+    <h3>AI Image Generation</h3>
+    <div class="form-row" style="align-items:center;gap:8px;">
+      <label>Gemini API Key</label>
+      <input type="password" id="gemini-api-key" placeholder="AIza..." style="min-width:400px;font-family:monospace;font-size:12px;">
+      <button class="btn btn-primary btn-sm" onclick="saveGeminiKey()">Save</button>
+    </div>
+    <p style="font-size:11px;color:var(--text-muted);margin-top:4px;">Get from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>. Powers the Generate button in the image editor.</p>
+  </div>
 </div>
 
 <!-- ============ TAB: Orders ============ -->
@@ -808,7 +818,18 @@
     <!-- Thumbnail strip -->
     <div id="img-thumb-strip" style="display:flex;gap:8px;padding:12px 20px;overflow-x:auto;border-bottom:1px solid var(--border);min-height:72px;align-items:center;"></div>
     <!-- Gallery view -->
-    <div id="img-gallery-view" style="padding:20px;text-align:center;">
+    <div id="img-gallery-view" style="padding:20px;text-align:center;position:relative;">
+      <!-- Auto-fix overlay for unsupported formats -->
+      <div id="img-autofix-overlay" style="display:none;position:absolute;inset:0;background:rgba(0,0,0,.55);z-index:10;border-radius:8px;display:none;align-items:center;justify-content:center;">
+        <div style="background:#fff;border-radius:10px;padding:24px 32px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.2);max-width:340px;">
+          <div style="font-size:14px;font-weight:600;margin-bottom:6px;color:#ef4444;">Unsupported Formats Detected</div>
+          <div id="img-autofix-count" style="font-size:13px;color:var(--text-muted);margin-bottom:16px;"></div>
+          <div style="display:flex;gap:8px;justify-content:center;">
+            <button class="btn btn-primary btn-sm" onclick="autoFixFormats()">Auto-fix All</button>
+            <button class="btn btn-outline btn-sm" onclick="dismissAutoFix()">Skip</button>
+          </div>
+        </div>
+      </div>
       <img id="img-preview-large" style="max-width:100%;max-height:60vh;border-radius:4px;object-fit:contain;background:#f8fafc;">
       <div id="img-info-bar" style="margin-top:12px;font-size:13px;color:var(--text-muted);"></div>
       <div id="img-action-bar" style="margin-top:12px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;"></div>
@@ -827,12 +848,22 @@
         <canvas id="img-edit-canvas" style="max-width:100%;border:1px solid var(--border);border-radius:4px;cursor:default;"></canvas>
         <div id="img-crop-overlay" style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;cursor:crosshair;"></div>
       </div>
-      <div id="img-crop-actions" style="display:none;margin-top:8px;">
+      <div id="img-crop-actions" style="display:none;margin-top:8px;display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;">
+        <select id="crop-aspect-ratio" onchange="_cropAspectRatio=this.value" style="padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;">
+          <option value="free">Free</option>
+          <option value="1:1">1:1 Square</option>
+          <option value="4:3">4:3</option>
+          <option value="3:4">3:4 Portrait</option>
+          <option value="16:9">16:9 Wide</option>
+          <option value="9:16">9:16 Tall</option>
+          <option value="3:2">3:2</option>
+          <option value="2:3">2:3 Portrait</option>
+        </select>
         <button class="btn btn-primary btn-sm" onclick="imgEdApplyCrop()">Apply Crop</button>
         <button class="btn btn-outline btn-sm" onclick="imgEdCancelCrop()">Cancel Crop</button>
       </div>
       <div style="margin-top:16px;display:flex;gap:8px;justify-content:center;">
-        <button class="btn btn-primary btn-sm" onclick="imgEdSave()">Save to Shopify</button>
+        <button class="btn btn-primary btn-sm" onclick="imgEdSave()">Save</button>
         <button class="btn btn-outline btn-sm" onclick="imgEdCancel()">Cancel</button>
       </div>
     </div>
@@ -3092,6 +3123,10 @@ async function loadSettings() {
     // Portal cookie
     document.getElementById('portal-cookie').value = data.portal_cookie || '';
 
+    // Gemini API key (masked from backend)
+    document.getElementById('gemini-api-key').value = data.gemini_api_key || '';
+    document.getElementById('gemini-api-key').placeholder = data.gemini_api_key ? 'Key saved (enter new to replace)' : 'AIza...';
+
     updatePricePreview();
   } catch (e) {
     showError('settings-error', 'Failed to load settings: ' + e.message);
@@ -3126,6 +3161,19 @@ async function saveEligibility() {
   } catch (e) {
     toast('Save error: ' + e.message, 'error');
   }
+}
+
+async function saveGeminiKey() {
+  const key = document.getElementById('gemini-api-key').value.trim();
+  if (!key) { toast('Enter an API key', 'error'); return; }
+  try {
+    const data = await apiPost('/api/settings', { gemini_api_key: key });
+    if (data.success) {
+      toast('Gemini API key saved');
+      document.getElementById('gemini-api-key').value = '';
+      document.getElementById('gemini-api-key').placeholder = 'Key saved (enter new to replace)';
+    } else toast(data.error || 'Save failed', 'error');
+  } catch (e) { toast('Save error: ' + e.message, 'error'); }
 }
 
 async function savePortalCookie() {
@@ -3676,6 +3724,7 @@ function openImgModal(url) {
 let _imgEdProductId = null;
 let _imgEdImages = [];
 let _imgEdSelected = 0;
+let _imgEdChanged = false;
 let _imgEdOriginalImg = null;   // HTMLImageElement of the original
 let _imgEdRotation = 0;
 let _imgEdFlipH = false;
@@ -3687,6 +3736,7 @@ async function openImgEditor(productId) {
   _imgEdProductId = productId;
   _imgEdImages = [];
   _imgEdSelected = 0;
+  _imgEdChanged = false;
   document.getElementById('img-editor-modal').style.display = 'block';
   document.getElementById('img-gallery-view').style.display = 'block';
   document.getElementById('img-edit-view').style.display = 'none';
@@ -3704,6 +3754,13 @@ async function openImgEditor(productId) {
     document.getElementById('img-editor-title').textContent = `Product Images (${_imgEdImages.length})`;
     renderImgThumbs();
     if (_imgEdImages.length > 0) selectEditorImage(0);
+    // Check for unsupported formats and show auto-fix overlay
+    const unsupported = _imgEdImages.filter(img => !img.valid_format);
+    if (unsupported.length > 0) {
+      document.getElementById('img-autofix-count').textContent = `${unsupported.length} of ${_imgEdImages.length} image${unsupported.length > 1 ? 's have' : ' has'} unsupported format${unsupported.length > 1 ? 's' : ''}. Convert to JPG?`;
+      const overlay = document.getElementById('img-autofix-overlay');
+      overlay.style.display = 'flex';
+    }
   } catch (e) {
     toast('Error loading images: ' + e.message, 'error');
     closeImgEditor();
@@ -3711,9 +3768,37 @@ async function openImgEditor(productId) {
 }
 
 function closeImgEditor() {
+  if (_imgEdChanged && _imgEdProductId) {
+    // Check if all images now have valid formats
+    const allValid = _imgEdImages.every(img => img.valid_format);
+    if (allValid) {
+      // Update product in both lists
+      for (const list of [_allPublishedProducts, _allUnpublishedProducts]) {
+        const p = list.find(p => String(p.id) === String(_imgEdProductId));
+        if (p) {
+          p.valid_image_format = true;
+          _recalcEligibility(p);
+        }
+      }
+      // Re-render visible tables
+      renderPublishedPage(_pageState['published'] ? _pageState['published'].page : 1);
+      renderUnpublishedPage(_pageState['unpublished'] ? _pageState['unpublished'].page : 1);
+    }
+  }
   document.getElementById('img-editor-modal').style.display = 'none';
   _imgEdProductId = null;
   _imgEdImages = [];
+  _imgEdChanged = false;
+}
+
+function _recalcEligibility(p) {
+  p.push_eligible = true;
+  if (!p.bluefly_category) p.push_eligible = false;
+  if (p.has_default_variants) p.push_eligible = false;
+  if (!p.has_quantity) p.push_eligible = false;
+  if (!p.has_images) p.push_eligible = false;
+  if (p.has_images && !p.valid_image_format) p.push_eligible = false;
+  if (!p.brand_product_id) p.push_eligible = false;
 }
 
 function renderImgThumbs() {
@@ -3755,10 +3840,9 @@ function selectEditorImage(index) {
   if (img.has_override) {
     actions += `<button class="btn btn-outline btn-sm" onclick="removeImageOverride(${index})">Revert</button>`;
   }
-  const jpgStyle = !img.valid_format ? 'btn-primary' : 'btn-outline';
-  actions += `<button class="btn ${jpgStyle} btn-sm" onclick="convertImageFormat(${index}, 'jpg')">JPG</button>`;
-  actions += `<button class="btn btn-outline btn-sm" onclick="convertImageFormat(${index}, 'png')">PNG</button>`;
+  actions += `<button class="btn btn-outline btn-sm" onclick="showConvertMenu(${index})">Convert</button>`;
   actions += `<button class="btn btn-outline btn-sm" onclick="enterEditMode(${index})">Edit</button>`;
+  actions += `<button class="btn btn-outline btn-sm" onclick="showGenerateUI()">Generate</button>`;
   document.getElementById('img-action-bar').innerHTML = actions;
 }
 
@@ -3798,9 +3882,62 @@ async function convertImageFormat(index, format) {
     img.effective_url = data.url;
     img.valid_format = true;
     img.has_override = true;
+    _imgEdChanged = true;
     toast(`Image ${index + 1} converted to ${format.toUpperCase()}`);
     selectEditorImage(index);
   } catch (e) { toast('Error: ' + e.message, 'error'); selectEditorImage(index); }
+}
+
+function showConvertMenu(index) {
+  const bar = document.getElementById('img-action-bar');
+  const img = _imgEdImages[index];
+  if (!img) return;
+  bar.innerHTML = `
+    <button class="btn btn-primary btn-sm" onclick="convertImageFormat(${index}, 'jpg')">JPG</button>
+    <button class="btn btn-outline btn-sm" onclick="convertImageFormat(${index}, 'png')">PNG</button>
+    <button class="btn btn-outline btn-sm" onclick="selectEditorImage(${index})">Cancel</button>
+  `;
+}
+
+function dismissAutoFix() {
+  document.getElementById('img-autofix-overlay').style.display = 'none';
+}
+
+async function autoFixFormats() {
+  const overlay = document.getElementById('img-autofix-overlay');
+  overlay.innerHTML = '<div style="background:#fff;border-radius:10px;padding:24px 32px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.2);"><span class="spinner"></span><div style="margin-top:10px;font-size:13px;color:var(--text-muted);">Converting images...</div></div>';
+  const indices = _imgEdImages.map((img, i) => !img.valid_format ? i : null).filter(i => i !== null);
+  let ok = 0, fail = 0;
+  for (const i of indices) {
+    try {
+      const resp = await fetch(`/api/products/${_imgEdProductId}/images/convert`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({image_index: i, url: _imgEdImages[i].original_url, format: 'jpg'})
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        _imgEdImages[i].effective_url = data.url;
+        _imgEdImages[i].valid_format = true;
+        _imgEdImages[i].has_override = true;
+        ok++;
+      } else { fail++; }
+    } catch { fail++; }
+  }
+  overlay.style.display = 'none';
+  // Restore overlay HTML for next time
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:10px;padding:24px 32px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.2);max-width:340px;">
+      <div style="font-size:14px;font-weight:600;margin-bottom:6px;color:#ef4444;">Unsupported Formats Detected</div>
+      <div id="img-autofix-count" style="font-size:13px;color:var(--text-muted);margin-bottom:16px;"></div>
+      <div style="display:flex;gap:8px;justify-content:center;">
+        <button class="btn btn-primary btn-sm" onclick="autoFixFormats()">Auto-fix All</button>
+        <button class="btn btn-outline btn-sm" onclick="dismissAutoFix()">Skip</button>
+      </div>
+    </div>`;
+  toast(`Converted ${ok} image${ok !== 1 ? 's' : ''}${fail ? `, ${fail} failed` : ''}`);
+  renderImgThumbs();
+  selectEditorImage(_imgEdSelected);
 }
 
 async function removeImageOverride(index) {
@@ -3819,6 +3956,145 @@ async function removeImageOverride(index) {
     toast('Override removed');
     selectEditorImage(index);
   } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+// ---- AI Image Generation ----
+
+let _genPreviewUrl = null; // Temporary R2 URL of generated image
+
+function showGenerateUI() {
+  const bar = document.getElementById('img-action-bar');
+  bar.innerHTML = `
+    <div style="width:100%;padding:0 8px;">
+      <div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap;justify-content:center;">
+        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Remove the background and place product on pure white" onclick="genShortcut('Remove the background, keep only the product on a pure white background')">Cutout</button>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Clean white studio backdrop with soft shadows" onclick="genShortcut('Place this product on a clean white studio background with soft shadows')">Studio</button>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Improve lighting, contrast and color balance" onclick="genShortcut('Enhance this product photo: improve lighting, contrast, and color balance for e-commerce')">Enhance</button>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Style product in a natural lifestyle setting" onclick="genShortcut('Show this product from a lifestyle perspective, styled in a natural setting')">Lifestyle</button>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Turn an iPhone photo into a pro e-commerce product shot" onclick="genShortcut('Transform this iPhone photo into a professional e-commerce product shot: clean white studio background, even soft lighting, remove reflections and shadows from phone camera, crisp product details, high-end commercial photography look')">Pro Shot</button>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Generate additional angle views of the product" onclick="genShortcut('Generate a different angle view of this product for e-commerce: show the product from a new perspective (side, back, top-down, or three-quarter view), clean white studio background, professional product photography lighting, sharp detail')">Angles</button>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input type="text" id="gen-prompt" placeholder="Describe the image or use a shortcut above..." style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+        <button class="btn btn-primary btn-sm" onclick="submitGenerate()">Go</button>
+        <button class="btn btn-outline btn-sm" onclick="selectEditorImage(_imgEdSelected)">Cancel</button>
+      </div>
+    </div>`;
+  document.getElementById('gen-prompt').focus();
+  document.getElementById('gen-prompt').addEventListener('keydown', e => {
+    if (e.key === 'Enter') submitGenerate();
+  });
+}
+
+function genShortcut(prompt) {
+  document.getElementById('gen-prompt').value = prompt;
+  submitGenerate();
+}
+
+async function submitGenerate() {
+  const prompt = document.getElementById('gen-prompt').value.trim();
+  if (!prompt) { toast('Enter a prompt', 'error'); return; }
+
+  const bar = document.getElementById('img-action-bar');
+  bar.innerHTML = '<span class="spinner"></span> <span style="font-size:13px;color:var(--text-muted);">Generating image...</span>';
+
+  try {
+    const resp = await fetch(`/api/products/${_imgEdProductId}/images/generate`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({prompt, image_url: _imgEdImages[_imgEdSelected]?.effective_url || ''})
+    });
+    // Response is streamed (spaces as keepalive, then JSON at end)
+    const text = (await resp.text()).trim();
+    let data;
+    try { data = JSON.parse(text); } catch { data = {error: text || 'Empty response'}; }
+    if (data.error) { toast(data.error, 'error'); selectEditorImage(_imgEdSelected); return; }
+
+    _genPreviewUrl = data.url;
+    _genShowingOriginal = false;
+    // Show generated image in preview (use proxy for R2 URLs)
+    document.getElementById('img-preview-large').src = imgSrc(data.url);
+    document.getElementById('img-info-bar').innerHTML = '<span style="color:var(--primary);font-weight:500;">AI Generated Preview</span>';
+
+    // Show accept/discard options with toggle
+    bar.innerHTML = `
+      <button class="btn btn-outline btn-sm" onclick="toggleGenOriginal()">Show Original</button>
+      <button class="btn btn-primary btn-sm" onclick="acceptGenImage('replace')">Replace Current</button>
+      <button class="btn btn-outline btn-sm" onclick="acceptGenImage('add')">Add as New</button>
+      <button class="btn btn-outline btn-sm" onclick="discardGenImage()">Discard</button>`;
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+    selectEditorImage(_imgEdSelected);
+  }
+}
+
+async function acceptGenImage(mode) {
+  if (!_genPreviewUrl) return;
+  const bar = document.getElementById('img-action-bar');
+  bar.innerHTML = '<span class="spinner"></span> <span style="font-size:13px;color:var(--text-muted);">Saving...</span>';
+
+  try {
+    const imageIndex = mode === 'replace' ? _imgEdSelected : _imgEdImages.length;
+    const resp = await fetch(`/api/products/${_imgEdProductId}/images/override`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({image_index: imageIndex, url: _genPreviewUrl})
+    });
+    if (!resp.ok) { toast('Failed to save', 'error'); selectEditorImage(_imgEdSelected); return; }
+
+    _imgEdChanged = true;
+
+    if (mode === 'replace') {
+      const img = _imgEdImages[_imgEdSelected];
+      img.effective_url = _genPreviewUrl;
+      img.valid_format = true;
+      img.has_override = true;
+      toast('Image replaced');
+      _genPreviewUrl = null;
+      selectEditorImage(_imgEdSelected);
+    } else {
+      // Add as new — re-fetch image list to include the new override
+      toast('Image added');
+      _genPreviewUrl = null;
+      const listResp = await fetch(`/api/products/${_imgEdProductId}/images`);
+      const listData = await listResp.json();
+      if (listResp.ok) {
+        _imgEdImages = listData.images || [];
+        renderImgThumbs();
+        selectEditorImage(_imgEdImages.length - 1);
+      } else {
+        selectEditorImage(_imgEdSelected);
+      }
+    }
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+    _genPreviewUrl = null;
+    selectEditorImage(_imgEdSelected);
+  }
+}
+
+let _genShowingOriginal = false;
+
+function toggleGenOriginal() {
+  const img = document.getElementById('img-preview-large');
+  const info = document.getElementById('img-info-bar');
+  _genShowingOriginal = !_genShowingOriginal;
+  if (_genShowingOriginal) {
+    img.src = imgSrc(_imgEdImages[_imgEdSelected]?.effective_url, 800);
+    info.innerHTML = '<span style="color:var(--text-muted);font-weight:500;">Original Image</span>';
+  } else {
+    img.src = imgSrc(_genPreviewUrl);
+    info.innerHTML = '<span style="color:var(--primary);font-weight:500;">AI Generated Preview</span>';
+  }
+  // Update button text
+  const toggleBtn = document.getElementById('img-action-bar').querySelector('button');
+  if (toggleBtn) toggleBtn.textContent = _genShowingOriginal ? 'Show Generated' : 'Show Original';
+}
+
+function discardGenImage() {
+  _genPreviewUrl = null;
+  _genShowingOriginal = false;
+  selectEditorImage(_imgEdSelected);
 }
 
 // ---- Canvas Edit Mode ----
@@ -3918,9 +4194,11 @@ function imgEdToggleCrop() {
   const btn = document.getElementById('img-crop-toggle');
   if (_imgEdCropping) {
     overlay.style.display = 'block';
-    actions.style.display = 'block';
+    actions.style.display = 'flex';
     btn.classList.add('btn-primary');
     _imgEdCropRect = null;
+    _cropAspectRatio = 'free';
+    document.getElementById('crop-aspect-ratio').value = 'free';
     // Set up mouse handlers
     overlay.onmousedown = imgEdCropStart;
     overlay.ontouchstart = imgEdCropTouchStart;
@@ -3930,6 +4208,31 @@ function imgEdToggleCrop() {
 }
 
 let _cropStartX = 0, _cropStartY = 0;
+let _cropAspectRatio = 'free';
+
+function _constrainCrop(startX, startY, cx, cy) {
+  if (_cropAspectRatio === 'free') {
+    return {
+      x: Math.min(startX, cx), y: Math.min(startY, cy),
+      w: Math.abs(cx - startX), h: Math.abs(cy - startY)
+    };
+  }
+  const [aw, ah] = _cropAspectRatio.split(':').map(Number);
+  const ratio = aw / ah;
+  let w = Math.abs(cx - startX);
+  let h = Math.abs(cy - startY);
+  // Constrain to aspect ratio based on the larger dimension
+  if (w / h > ratio) {
+    w = h * ratio;
+  } else {
+    h = w / ratio;
+  }
+  return {
+    x: cx < startX ? startX - w : startX,
+    y: cy < startY ? startY - h : startY,
+    w, h
+  };
+}
 
 function imgEdCropStart(e) {
   e.preventDefault();
@@ -3944,12 +4247,7 @@ function imgEdCropStart(e) {
   const onMove = (me) => {
     const cx = (me.clientX - rect.left) * scaleX;
     const cy = (me.clientY - rect.top) * scaleY;
-    _imgEdCropRect = {
-      x: Math.min(_cropStartX, cx),
-      y: Math.min(_cropStartY, cy),
-      w: Math.abs(cx - _cropStartX),
-      h: Math.abs(cy - _cropStartY)
-    };
+    _imgEdCropRect = _constrainCrop(_cropStartX, _cropStartY, cx, cy);
     imgEdRedraw();
   };
   const onUp = () => {
@@ -3974,12 +4272,7 @@ function imgEdCropTouchStart(e) {
     const t = te.touches[0];
     const cx = (t.clientX - rect.left) * scaleX;
     const cy = (t.clientY - rect.top) * scaleY;
-    _imgEdCropRect = {
-      x: Math.min(_cropStartX, cx),
-      y: Math.min(_cropStartY, cy),
-      w: Math.abs(cx - _cropStartX),
-      h: Math.abs(cy - _cropStartY)
-    };
+    _imgEdCropRect = _constrainCrop(_cropStartX, _cropStartY, cx, cy);
     imgEdRedraw();
   };
   overlay.ontouchend = () => { overlay.ontouchmove = null; overlay.ontouchend = null; };

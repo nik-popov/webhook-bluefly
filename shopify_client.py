@@ -278,7 +278,7 @@ class ShopifyClient:
         }
         """
         all_products = []
-        BATCH = 50
+        BATCH = 250
         for i in range(0, len(product_ids), BATCH):
             chunk = product_ids[i:i + BATCH]
             gids = [f"gid://shopify/Product/{pid}" for pid in chunk]
@@ -366,7 +366,7 @@ class ShopifyClient:
         """
         query = """
         query listProducts($cursor: String, $query: String) {
-          products(first: 50, after: $cursor, query: $query, sortKey: ID) {
+          products(first: 250, after: $cursor, query: $query, sortKey: ID) {
             edges {
               node {
                 id
@@ -526,7 +526,7 @@ class ShopifyClient:
         """Yield pages of products as they arrive from Shopify GraphQL pagination."""
         query = """
         query listProducts($cursor: String, $query: String) {
-          products(first: 50, after: $cursor, query: $query, sortKey: ID) {
+          products(first: 250, after: $cursor, query: $query, sortKey: ID) {
             edges {
               node {
                 id
