@@ -2112,9 +2112,8 @@ async function pushSelected() {
     const idx = _allUnpublishedProducts.findIndex(p => p.id === id);
     if (idx >= 0) _allUnpublishedProducts.splice(idx, 1);
   }
-  _unpublishedProducts = _allUnpublishedProducts.slice();
-  _updateUnpublishedCounts();
-  renderUnpublishedPage(_pageState['unpublished'] ? _pageState['unpublished'].page : 1);
+  document.getElementById('unpub-reason-filter').value = '';
+  filterUnpublished();
   _publishedLoaded = false;
 }
 
@@ -2593,9 +2592,8 @@ async function bulkPush() {
     const idx = _allUnpublishedProducts.findIndex(p => p.id === id);
     if (idx >= 0) _allUnpublishedProducts.splice(idx, 1);
   }
-  _unpublishedProducts = _allUnpublishedProducts.slice();
-  _updateUnpublishedCounts();
-  renderUnpublishedPage(_pageState['unpublished'] ? _pageState['unpublished'].page : 1);
+  document.getElementById('unpub-reason-filter').value = '';
+  filterUnpublished();
   _publishedLoaded = false;
 }
 
