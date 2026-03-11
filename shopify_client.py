@@ -7,8 +7,10 @@ to support the Shopify → Bluefly sync pipeline.
 
 import json
 import time
+import uuid
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
+from urllib.parse import urlencode
 
 
 class ShopifyClient:
@@ -746,3 +748,77 @@ class ShopifyClient:
         product["numeric_id"] = int(gid.split("/")[-1]) if gid else None
 
         return product
+
+    # ------------------------------------------------------------------
+    # Staged uploads (for image editing/upload)
+    # ------------------------------------------------------------------
+
+    def staged_upload_create(self, filename: str, mime_type: str, file_size: int) -> dict | None:
+        """Create a staged upload target for a file."""
+        query = """
+        mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+          stagedUploadsCreate(input: $input) {
+            stagedTargets {
+              url
+              resourceUrl
+              parameters { name value }
+            }
+            userErrors { field message }
+          }
+        }
+        """
+        variables = {
+            "input": [{
+                "resource": "IMAGE",
+                "filename": filename,
+                "mimeType": mime_type,
+                "fileSize": str(file_size),
+                "httpMethod": "POST",
+            }]
+        }
+        result = self.graphql(query, variables)
+        data = result.get("data", {}).get("stagedUploadsCreate", {})
+        errors = data.get("userErrors", [])
+        if errors:
+            raise Exception(f"Staged upload error: {errors}")
+        targets = data.get("stagedTargets", [])
+        return targets[0] if targets else None
+
+    def upload_staged_file(self, target: dict, file_bytes: bytes,
+                           filename: str, mime_type: str) -> str | None:
+        """Upload file bytes to a staged upload target. Returns the resourceUrl."""
+        upload_url = target["url"]
+        params = target.get("parameters", [])
+        resource_url = target.get("resourceUrl", "")
+
+        # Build multipart form data
+        boundary = uuid.uuid4().hex
+        body_parts = []
+        for p in params:
+            body_parts.append(
+                f'--{boundary}\r\n'
+                f'Content-Disposition: form-data; name="{p["name"]}"\r\n\r\n'
+                f'{p["value"]}\r\n'
+            )
+        body_parts.append(
+            f'--{boundary}\r\n'
+            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+            f'Content-Type: {mime_type}\r\n\r\n'
+        )
+        # Assemble: text parts + file bytes + closing boundary
+        body_prefix = "".join(body_parts).encode("utf-8")
+        body_suffix = f"\r\n--{boundary}--\r\n".encode("utf-8")
+        body = body_prefix + file_bytes + body_suffix
+
+        req = Request(upload_url, data=body, method="POST")
+        req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+        req.add_header("Content-Length", str(len(body)))
+
+        try:
+            resp = urlopen(req, timeout=30)
+            if resp.status in (200, 201, 204):
+                return resource_url
+            return None
+        except HTTPError as e:
+            print(f"[Shopify] Staged upload failed: {e.code} {e.read().decode()}")
+            return None

@@ -20,6 +20,11 @@ Provides:
   POST /api/orders/acknowledge      Acknowledge an order
   POST /api/orders/fulfill          Submit fulfillment/tracking data
   POST /api/orders/cancel           Cancel an unfillable order
+  GET  /api/products/<id>/images    List all images for a product
+  POST /api/products/<id>/images/override  Save image URL override
+  DELETE /api/products/<id>/images/override Remove image URL override
+  GET  /api/image-proxy             Proxy Shopify CDN image (CORS bypass)
+  POST /api/products/<id>/images/upload    Upload edited image to Shopify
 """
 
 import os
@@ -184,6 +189,210 @@ def _has_valid_image_format(image_url: str) -> bool:
     return False
 
 
+def _apply_image_overrides(product: dict, product_id: int, cfg: dict) -> None:
+    """Replace image URLs with overrides from config (in-place)."""
+    overrides = cfg.get("image_overrides", {}).get(str(product_id), {})
+    if not overrides:
+        return
+    for idx_str, new_url in overrides.items():
+        idx = int(idx_str)
+        images = product.get("images", [])
+        if idx < len(images):
+            if isinstance(images[idx], dict):
+                images[idx]["url"] = new_url
+            else:
+                images[idx] = new_url
+
+
+# -----------------------------------------------------------------------
+# Product images API
+# -----------------------------------------------------------------------
+
+@dashboard_bp.route("/api/products/<int:product_id>/images")
+def api_product_images(product_id):
+    """Return all images for a product, with format validity flags."""
+    clients = _get_clients()
+    shopify = clients["shopify"]
+    if not shopify:
+        return jsonify({"error": "Shopify client not configured"}), 500
+
+    product = shopify.get_product_full(product_id)
+    if not product:
+        return jsonify({"error": "Product not found"}), 404
+
+    cfg = load_config()
+    image_overrides = cfg.get("image_overrides", {}).get(str(product_id), {})
+
+    images = []
+    for i, img in enumerate(product.get("images", [])):
+        url = img.get("url", "") if isinstance(img, dict) else str(img)
+        override_url = image_overrides.get(str(i))
+        effective_url = override_url or url
+        images.append({
+            "index": i,
+            "original_url": url,
+            "effective_url": effective_url,
+            "alt_text": img.get("altText", "") if isinstance(img, dict) else "",
+            "valid_format": _has_valid_image_format(effective_url),
+            "has_override": bool(override_url),
+        })
+
+    return jsonify({"product_id": product_id, "images": images})
+
+
+@dashboard_bp.route("/api/products/<int:product_id>/images/override", methods=["POST"])
+def api_image_override(product_id):
+    """Save an image URL override for a product image."""
+    data = request.get_json(force=True)
+    image_index = data.get("image_index")
+    new_url = data.get("url")
+
+    if image_index is None or not new_url:
+        return jsonify({"error": "image_index and url required"}), 400
+
+    cfg = load_config()
+    overrides = cfg.setdefault("image_overrides", {})
+    product_overrides = overrides.setdefault(str(product_id), {})
+    product_overrides[str(image_index)] = new_url
+    save_config(cfg)
+
+    return jsonify({"ok": True, "product_id": product_id,
+                     "image_index": image_index, "url": new_url})
+
+
+@dashboard_bp.route("/api/products/<int:product_id>/images/override", methods=["DELETE"])
+def api_image_override_delete(product_id):
+    """Remove an image URL override for a product image."""
+    data = request.get_json(force=True)
+    image_index = data.get("image_index")
+
+    if image_index is None:
+        return jsonify({"error": "image_index required"}), 400
+
+    cfg = load_config()
+    overrides = cfg.get("image_overrides", {})
+    product_overrides = overrides.get(str(product_id), {})
+    product_overrides.pop(str(image_index), None)
+    if not product_overrides:
+        overrides.pop(str(product_id), None)
+    save_config(cfg)
+
+    return jsonify({"ok": True})
+
+
+@dashboard_bp.route("/api/image-proxy")
+def api_image_proxy():
+    """Proxy a Shopify CDN image to avoid CORS issues with Canvas."""
+    from urllib.request import urlopen, Request
+    url = request.args.get("url", "")
+    if not url or "cdn.shopify.com" not in url:
+        return jsonify({"error": "Invalid URL"}), 400
+    try:
+        req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urlopen(req, timeout=15)
+        ct = resp.headers.get("Content-Type", "image/jpeg")
+        return Response(resp.read(), content_type=ct,
+                        headers={"Cache-Control": "public, max-age=3600"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@dashboard_bp.route("/api/products/<int:product_id>/images/convert", methods=["POST"])
+def api_image_convert(product_id):
+    """Download a Shopify image, convert to target format, upload back, and save as override."""
+    import base64
+    from urllib.request import urlopen, Request
+    from io import BytesIO
+    from PIL import Image
+
+    data = request.get_json(force=True)
+    image_index = data.get("image_index")
+    source_url = data.get("url")
+    target_format = data.get("format", "jpg").lower()
+
+    if image_index is None or not source_url:
+        return jsonify({"error": "image_index and url required"}), 400
+    if target_format not in ("jpg", "jpeg", "png"):
+        return jsonify({"error": "Unsupported format"}), 400
+
+    try:
+        # Download original image
+        req = Request(source_url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urlopen(req, timeout=30)
+        img_bytes = resp.read()
+
+        # Convert with Pillow
+        img = Image.open(BytesIO(img_bytes))
+        if img.mode in ("RGBA", "P") and target_format in ("jpg", "jpeg"):
+            img = img.convert("RGB")
+        out = BytesIO()
+        pil_format = "JPEG" if target_format in ("jpg", "jpeg") else "PNG"
+        img.save(out, format=pil_format, quality=92)
+        file_bytes = out.getvalue()
+
+        ext = "jpg" if target_format in ("jpg", "jpeg") else "png"
+        mime = "image/jpeg" if ext == "jpg" else "image/png"
+        key = f"images/{product_id}/{image_index}.{ext}"
+
+        # Upload to R2
+        import r2_client
+        resource_url = r2_client.upload(file_bytes, key, mime)
+
+        # Save as override
+        cfg = load_config()
+        overrides = cfg.setdefault("image_overrides", {})
+        product_overrides = overrides.setdefault(str(product_id), {})
+        product_overrides[str(image_index)] = resource_url
+        save_config(cfg)
+
+        return jsonify({"ok": True, "url": resource_url,
+                         "product_id": product_id, "image_index": image_index})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@dashboard_bp.route("/api/products/<int:product_id>/images/upload", methods=["POST"])
+def api_image_upload(product_id):
+    """Upload an edited image to Shopify and return the new CDN URL."""
+    import base64
+    data = request.get_json(force=True)
+    image_data_url = data.get("image_data")  # data:image/jpeg;base64,...
+    image_index = data.get("image_index")
+    filename = data.get("filename", f"edited_{product_id}_{image_index}.jpg")
+
+    if not image_data_url or image_index is None:
+        return jsonify({"error": "image_data and image_index required"}), 400
+
+    # Decode base64 data URL
+    try:
+        header, b64data = image_data_url.split(",", 1)
+        mime_type = header.split(":")[1].split(";")[0] if ":" in header else "image/jpeg"
+        file_bytes = base64.b64decode(b64data)
+    except Exception as e:
+        return jsonify({"error": f"Invalid image data: {e}"}), 400
+
+    try:
+        # Determine extension from mime
+        ext = "png" if "png" in mime_type else "jpg"
+        key = f"images/{product_id}/{image_index}_edited.{ext}"
+
+        # Upload to R2
+        import r2_client
+        resource_url = r2_client.upload(file_bytes, key, mime_type)
+
+        # Save as override
+        cfg = load_config()
+        overrides = cfg.setdefault("image_overrides", {})
+        product_overrides = overrides.setdefault(str(product_id), {})
+        product_overrides[str(image_index)] = resource_url
+        save_config(cfg)
+
+        return jsonify({"ok": True, "url": resource_url,
+                         "product_id": product_id, "image_index": image_index})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # -----------------------------------------------------------------------
 # Products API
 # -----------------------------------------------------------------------
@@ -216,6 +425,18 @@ def _enrich_products(products, synced_products, cfg):
         p["has_images"] = bool(p.get("image_url"))
         p["has_quantity"] = (p.get("total_quantity", 0) or 0) > 0
         p["valid_image_format"] = _has_valid_image_format(p.get("image_url", ""))
+
+        # Check image overrides — if override fixes the format, reflect that
+        img_overrides = cfg.get("image_overrides", {}).get(str(pid), {})
+        if img_overrides:
+            override_0 = img_overrides.get("0")
+            if override_0:
+                if not p["valid_image_format"] and _has_valid_image_format(override_0):
+                    p["valid_image_format"] = True
+                p["image_url"] = override_0
+            p["has_image_overrides"] = True
+        else:
+            p["has_image_overrides"] = False
 
         # Apply per-product category override from config
         cat_overrides = cfg.get("category_overrides", {})
@@ -519,6 +740,9 @@ def api_push_product():
         if vendor_override:
             enriched["vendor"] = vendor_override
 
+        # Apply image URL overrides (format conversions, edited images)
+        _apply_image_overrides(enriched, int(product_id), cfg)
+
         if not category_id:
             return jsonify({"error": "No bluefly_category metafield"}), 400
 
@@ -721,6 +945,9 @@ def api_push_bulk():
                 if v_ov:
                     enriched["vendor"] = v_ov
 
+                # Apply image URL overrides
+                _apply_image_overrides(enriched, pid, cfg)
+
                 if not category_id:
                     yield json.dumps({"type": "skip", "product_id": pid, "reason": "no category"}) + "\n"
                     continue
@@ -886,6 +1113,9 @@ def api_retry_errors():
             category_id = get_metafield(metafields, "custom", "bluefly_category")
             if not category_id:
                 continue
+
+            # Apply image URL overrides
+            _apply_image_overrides(enriched, int(pid), cfg)
 
             sql_field_map = {}
             try:
@@ -1332,6 +1562,9 @@ def api_sync_qty_price():
                 adj = 0
             elif price_ov.get("type") == "pct":
                 adj = float(price_ov["value"])
+
+        # Apply image URL overrides
+        _apply_image_overrides(enriched, int(product_id), cfg)
 
         # Full re-push (PUT) with merged quantities — most reliable way
         # to ensure Bluefly gets correct inventory + price.
