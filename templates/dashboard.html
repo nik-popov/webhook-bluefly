@@ -2035,7 +2035,7 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
 
     return `<tr>
       ${chkCol}<td>${img}</td>
-      <td style="white-space:normal;min-width:200px"><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:inherit;"><strong>${esc(p.title)}</strong></a>${titleStar}<br><span style="font-size:11px;color:var(--text-muted);cursor:pointer;text-decoration:underline dotted;" onclick="editTitle(${p.id}, this)">ID: ${p.id}</span></td>
+      <td style="white-space:normal;min-width:200px"><span style="cursor:pointer;text-decoration:underline dotted;" onclick="editTitle(${p.id}, this)"><strong>${esc(p.title)}</strong>${titleStar}</span> <a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:var(--text-muted);font-size:11px;">&#8599;</a><br><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="font-size:11px;color:var(--text-muted);text-decoration:none;">ID: ${p.id}</a></td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editVendor(${p.id}, this)">${esc(p.vendor)}${vendorStar}${vendorFavBtn}</td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editCategory(${p.id}, '${esc(p.bluefly_category || '')}')">
         <span class="cat-cell" data-catid="${esc(p.bluefly_category || '')}">${esc(p.bluefly_category || '-')}</span>${p.category_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Category overridden">&#9733;</span>' : ''}${favBtn}
@@ -2110,7 +2110,7 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
     return `<tr>
       <td>${chk}</td>
       <td>${img}</td>
-      <td style="white-space:normal;min-width:200px"><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:inherit;"><strong>${esc(p.title)}</strong></a>${titleStar}<br><span style="font-size:11px;color:var(--text-muted);cursor:pointer;text-decoration:underline dotted;" onclick="editTitle(${p.id}, this)">ID: ${p.id}</span></td>
+      <td style="white-space:normal;min-width:200px"><span style="cursor:pointer;text-decoration:underline dotted;" onclick="editTitle(${p.id}, this)"><strong>${esc(p.title)}</strong>${titleStar}</span> <a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:var(--text-muted);font-size:11px;">&#8599;</a><br><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="font-size:11px;color:var(--text-muted);text-decoration:none;">ID: ${p.id}</a></td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editVendor(${p.id}, this)">${esc(p.vendor)}${vendorStar}${vendorFavBtn}</td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editCategory(${p.id}, '${esc(p.bluefly_category || '')}')">
         <span class="cat-cell" data-catid="${esc(p.bluefly_category || '')}">${esc(p.bluefly_category || '-')}</span>${p.category_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Category overridden">&#9733;</span>' : ''}${favBtn}
