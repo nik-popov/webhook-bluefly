@@ -22,9 +22,12 @@ def _bucket():
 
 
 def _public_url(key: str) -> str:
-    bucket = _bucket()
-    account_id = os.environ.get("R2_ACCOUNT_ID", "")
-    return f"https://{bucket}.{account_id}.r2.dev/{key}"
+    base = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")
+    if not base:
+        bucket = _bucket()
+        account_id = os.environ.get("R2_ACCOUNT_ID", "")
+        base = f"https://{bucket}.{account_id}.r2.dev"
+    return f"{base}/{key}"
 
 
 def upload(file_bytes: bytes, key: str, content_type: str = "image/jpeg") -> str:

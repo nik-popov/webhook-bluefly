@@ -285,7 +285,8 @@ def api_image_proxy():
     """Proxy a Shopify CDN image to avoid CORS issues with Canvas."""
     from urllib.request import urlopen, Request
     url = request.args.get("url", "")
-    if not url or "cdn.shopify.com" not in url:
+    allowed = ("cdn.shopify.com", ".r2.dev", "vendizeinc.com", "bk.iconluxury.shop")
+    if not url or not any(host in url for host in allowed):
         return jsonify({"error": "Invalid URL"}), 400
     try:
         req = Request(url, headers={"User-Agent": "Mozilla/5.0"})

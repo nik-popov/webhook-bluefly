@@ -2057,7 +2057,7 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
   }
   tbody.innerHTML = products.map(p => {
     const img = p.image_url
-      ? `<img src="${p.image_url}&width=80" class="prod-img" loading="lazy" style="cursor:pointer" onclick="openImgEditor(${p.id})" onerror="this.outerHTML='<div class=prod-img-placeholder>?</div>'">`
+      ? `<img src="${p.image_url.includes('cdn.shopify.com') ? p.image_url + '&width=80' : p.image_url}" class="prod-img" loading="lazy" style="cursor:pointer" onclick="openImgEditor(${p.id})" onerror="this.outerHTML='<div class=prod-img-placeholder>?</div>'">`
       : '<div class="prod-img-placeholder">?</div>';
 
     let statusBadge;
@@ -2175,7 +2175,7 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
   }
   tbody.innerHTML = products.map(p => {
     const img = p.image_url
-      ? `<img src="${p.image_url}&width=80" class="prod-img" loading="lazy" style="cursor:pointer" onclick="openImgEditor(${p.id})" onerror="this.outerHTML='<div class=prod-img-placeholder>?</div>'">`
+      ? `<img src="${p.image_url.includes('cdn.shopify.com') ? p.image_url + '&width=80' : p.image_url}" class="prod-img" loading="lazy" style="cursor:pointer" onclick="openImgEditor(${p.id})" onerror="this.outerHTML='<div class=prod-img-placeholder>?</div>'">`
       : '<div class="prod-img-placeholder">?</div>';
 
     let priceDisplay = '-';
@@ -3722,7 +3722,7 @@ function renderImgThumbs() {
         : '';
     return `<div onclick="selectEditorImage(${i})" style="position:relative;cursor:pointer;flex-shrink:0;">
       ${badge}
-      <img src="${esc(img.effective_url)}&width=80" style="width:52px;height:52px;border-radius:6px;object-fit:cover;border:${border};background:#f3f4f6;"
+      <img src="${img.effective_url.includes('cdn.shopify.com') ? esc(img.effective_url) + '&width=80' : esc(img.effective_url)}" style="width:52px;height:52px;border-radius:6px;object-fit:cover;border:${border};background:#f3f4f6;"
            onerror="this.style.background='#fecaca';this.alt='Error'">
     </div>`;
   }).join('');
@@ -3733,7 +3733,8 @@ function selectEditorImage(index) {
   const img = _imgEdImages[index];
   if (!img) return;
   renderImgThumbs();
-  document.getElementById('img-preview-large').src = img.effective_url + '&width=800';
+  const previewUrl = img.effective_url.includes('cdn.shopify.com') ? img.effective_url + '&width=800' : img.effective_url;
+  document.getElementById('img-preview-large').src = previewUrl;
 
   // Info bar
   const ext = getUrlExtension(img.original_url);
