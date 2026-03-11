@@ -35,7 +35,9 @@ class D1Client:
         if params:
             body["params"] = params
         resp = self._session.post(self.url, json=body, timeout=15)
-        resp.raise_for_status()
+        if not resp.ok:
+            logger.error("D1 HTTP %s: %s | sql=%s", resp.status_code, resp.text[:500], sql[:200])
+            resp.raise_for_status()
         data = resp.json()
         if not data.get("success"):
             errors = data.get("errors", [])

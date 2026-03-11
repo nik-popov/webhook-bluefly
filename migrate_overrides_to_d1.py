@@ -45,6 +45,11 @@ SCHEMA_STATEMENTS = [
         value TEXT NOT NULL,
         updated_at TEXT DEFAULT (datetime('now'))
     )""",
+    """CREATE TABLE IF NOT EXISTS override_gender (
+        product_id TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT DEFAULT (datetime('now'))
+    )""",
     # -- Image overrides (composite key) --
     """CREATE TABLE IF NOT EXISTS override_image (
         product_id TEXT NOT NULL,

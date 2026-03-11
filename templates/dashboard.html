@@ -283,6 +283,7 @@
   .source-badge.auto { background: #f0fdf4; color: #166534; }
   .link-external { color: var(--primary); text-decoration: none; font-size: 13px; font-weight: 500; }
   .link-external:hover { text-decoration: underline; }
+  .cat-item:hover, .sf-item:hover { background: var(--accent-bg, #e8f0fe) !important; }
 </style>
 </head>
 <body>
@@ -368,10 +369,13 @@
       <option value="brand_product_id">Brand Product ID overridden</option>
     </select>
     <button class="btn btn-primary" onclick="loadPublished(true)">Refresh</button>
+    <button class="btn btn-primary" id="repush-selected-btn" onclick="repushSelectedProducts()" disabled>Re-push Selected (<span id="repush-selected-count">0</span>)</button>
     <button class="btn btn-success" id="sync-selected-btn" onclick="syncSelectedProducts()" disabled>Sync Selected (<span id="sync-selected-count">0</span>)</button>
     <button class="btn btn-outline" id="reset-selected-btn" onclick="resetSelectedSync()" disabled>Reset Selected (<span id="pub-selected-count">0</span>)</button>
+    <button class="btn btn-outline" id="bulk-cat-pub-btn" onclick="bulkEditCategory('published')" disabled>Set Category</button>
     <button class="btn btn-danger" id="delete-selected-btn" onclick="deleteSelectedProducts()" disabled>Delete Selected</button>
     <button class="btn btn-danger" id="delete-all-btn" onclick="deleteAllPublished()" title="Delete all from portal + reset all pipeline logs">Delete All</button>
+    <button class="btn btn-outline" id="size-diff-btn" onclick="loadSizeDiff()" title="Check which pushed products are on portal vs hanging">Portal Sync</button>
     <span id="pub-count-label" style="font-size:13px;color:var(--text-muted);"></span>
   </div>
   <div id="pub-delete-progress" style="display:none;margin-bottom:12px;">
@@ -393,6 +397,7 @@
           <th></th>
           <th class="sortable-th" onclick="toggleSort('published','title')">Title <span class="sort-arrow" data-col="title"></span></th>
           <th class="sortable-th" onclick="toggleSort('published','vendor')">Vendor <span class="sort-arrow" data-col="vendor"></span></th>
+          <th class="sortable-th" onclick="toggleSort('published','gender')">Gender <span class="sort-arrow" data-col="gender"></span></th>
           <th class="sortable-th" onclick="toggleSort('published','category')">Category <span class="sort-arrow" data-col="category"></span></th>
           <th class="sortable-th" onclick="toggleSort('published','size_field')">Size Field <span class="sort-arrow" data-col="size_field"></span></th>
           <th class="sortable-th" onclick="toggleSort('published','variants')">Variants <span class="sort-arrow" data-col="variants"></span></th>
@@ -406,6 +411,7 @@
         <tr class="filter-row">
           <th></th><th></th><th></th>
           <th><select id="pub-filter-vendor" class="col-filter" onchange="filterPublished()"><option value="">All</option></select></th>
+          <th><select id="pub-filter-gender" class="col-filter" onchange="filterPublished()"><option value="">All</option></select></th>
           <th><select id="pub-filter-category" class="col-filter" onchange="filterPublished()"><option value="">All</option></select></th>
           <th></th><th></th><th></th><th></th>
           <th><select id="pub-filter-status" class="col-filter" onchange="filterPublished()"><option value="">All</option></select></th>
@@ -417,6 +423,19 @@
       <tbody id="published-tbody"></tbody>
     </table>
     <div class="pagination" id="published-pagination"></div>
+  </div>
+  <!-- Size Diff Results -->
+  <div id="size-diff-panel" style="display:none; margin-top:16px;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+      <span style="font-size:14px;font-weight:600;">Portal Sync Check</span>
+      <span id="size-diff-summary" style="font-size:13px;color:var(--text-muted);"></span>
+      <button class="btn btn-outline btn-sm" onclick="document.getElementById('size-diff-panel').style.display='none'">Close</button>
+    </div>
+    <div id="size-diff-loading" style="display:none;margin-bottom:10px;">
+      <div class="progress-bar"><div class="fill" id="size-diff-fill" style="width:0%"></div></div>
+      <div id="size-diff-status" style="font-size:13px;color:var(--text-muted);"></div>
+    </div>
+    <div id="size-diff-results" style="display:none;"></div>
   </div>
 </div>
 
@@ -435,6 +454,7 @@
       <option value="eligible">Eligible only</option>
       <option value="no-category">No category</option>
       <option value="default-variants">Default size only</option>
+      <option value="no-default">No default size</option>
       <option value="no-images">No images</option>
       <option value="bad-image">Bad image format</option>
       <option value="no-qty">Qty = 0</option>
@@ -443,6 +463,7 @@
     <button class="btn btn-success" id="bulk-push-btn" onclick="bulkPush()">Push All Unpushed</button>
     <button class="btn btn-primary" onclick="loadUnpublished(true)">Refresh</button>
     <button class="btn btn-success" id="push-selected-btn" onclick="pushSelected()" disabled>Push Selected (<span id="selected-count">0</span>)</button>
+    <button class="btn btn-outline" id="bulk-cat-unpub-btn" onclick="bulkEditCategory('unpublished')" disabled>Set Category</button>
     <span id="unpub-count-label" style="font-size:13px;color:var(--text-muted);"></span>
   </div>
   <div class="table-wrap">
@@ -453,6 +474,7 @@
           <th></th>
           <th class="sortable-th" onclick="toggleSort('unpublished','title')">Title <span class="sort-arrow" data-col="title"></span></th>
           <th class="sortable-th" onclick="toggleSort('unpublished','vendor')">Vendor <span class="sort-arrow" data-col="vendor"></span></th>
+          <th class="sortable-th" onclick="toggleSort('unpublished','gender')">Gender <span class="sort-arrow" data-col="gender"></span></th>
           <th class="sortable-th" onclick="toggleSort('unpublished','category')">Category <span class="sort-arrow" data-col="category"></span></th>
           <th class="sortable-th" onclick="toggleSort('unpublished','size_field')">Size Field <span class="sort-arrow" data-col="size_field"></span></th>
           <th class="sortable-th" onclick="toggleSort('unpublished','variants')">Variants <span class="sort-arrow" data-col="variants"></span></th>
@@ -464,6 +486,7 @@
         <tr class="filter-row">
           <th></th><th></th><th></th>
           <th><select id="unpub-filter-vendor" class="col-filter" onchange="filterUnpublished()"><option value="">All</option></select></th>
+          <th><select id="unpub-filter-gender" class="col-filter" onchange="filterUnpublished()"><option value="">All</option></select></th>
           <th><select id="unpub-filter-category" class="col-filter" onchange="filterUnpublished()"><option value="">All</option></select></th>
           <th></th><th></th><th></th><th></th>
           <th><div class="multi-dropdown" id="eligible-dropdown">
@@ -472,6 +495,7 @@
               <label><input type="checkbox" value="no-category" onchange="onEligibleFilterChange()"> No category</label>
               <label><input type="checkbox" value="has-category" onchange="onEligibleFilterChange()"> Has category</label>
               <label><input type="checkbox" value="default-variants" onchange="onEligibleFilterChange()"> Default size only</label>
+              <label><input type="checkbox" value="no-default" onchange="onEligibleFilterChange()"> No default size</label>
               <label><input type="checkbox" value="no-images" onchange="onEligibleFilterChange()"> No images</label>
               <label><input type="checkbox" value="has-images" onchange="onEligibleFilterChange()"> Has images</label>
               <label><input type="checkbox" value="bad-image" onchange="onEligibleFilterChange()"> Bad image format</label>
@@ -672,18 +696,7 @@
   </div>
 
   <div class="settings-group">
-    <h3>Size Conversions</h3>
-    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
-      Conversion tables used when Shopify sizes don't match Bluefly's allowed values.
-      Edit mappings below and click Save.
-    </p>
-    <div id="size-mappings-container"></div>
-    <div class="form-row" style="margin-top:12px">
-      <button class="btn btn-primary" onclick="saveSizeMappings()">Save Size Mappings</button>
-      <span id="size-mappings-status" style="margin-left:12px;font-size:13px"></span>
-    </div>
-
-    <h3 style="margin-top:24px">Brand Size Conversions</h3>
+    <h3>Brand Size Conversions</h3>
     <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
       Brand-specific conversion tables keyed by ff_size_scale label.
       Maps IT/UK/EU sizes &rarr; US sizes before standard resolution.
@@ -694,6 +707,26 @@
       <button class="btn btn-outline" onclick="addBrandTable()">+ Add Brand Table</button>
       <span id="brand-conversions-status" style="margin-left:12px;font-size:13px"></span>
     </div>
+
+    <h3 style="margin-top:24px">BF Mapping Overrides</h3>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
+      Manual Shopify &rarr; Bluefly value overrides stored in D1.
+      Used when automatic size resolution fails (e.g. EU bra sizes &rarr; US).
+    </p>
+    <div style="margin-bottom:10px;display:flex;align-items:center;gap:8px">
+      <label style="font-size:13px;font-weight:500">Filter by field:</label>
+      <select id="bf-mapping-filter" onchange="renderBfMappings()" style="padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:13px">
+        <option value="">All fields</option>
+      </select>
+    </div>
+    <div id="bf-mappings-container"></div>
+    <div class="form-row" style="margin-top:12px;gap:8px;display:flex;align-items:center">
+      <button class="btn btn-primary" onclick="saveBfMappings()">Save BF Mappings</button>
+      <button class="btn btn-outline" onclick="addBfMappingRow()">+ Add Row</button>
+      <button class="btn btn-outline" onclick="scanMissingSizeMappings()">Scan Missing Sizes</button>
+      <span id="bf-mappings-status" style="margin-left:12px;font-size:13px"></span>
+    </div>
+    <div id="missing-sizes-result" style="display:none;margin-top:12px;border:1.5px solid var(--border);border-radius:10px;max-height:400px;overflow-y:auto;"></div>
   </div>
 </div>
 
@@ -1016,7 +1049,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     if (tab === 'unpublished') loadUnpublished(false);
     if (tab === 'events') loadEvents();
     if (tab === 'mapping') loadFieldMapping();
-    if (tab === 'sizes') loadSizeConversions();
+    if (tab === 'sizes') { loadSizeConversions(); loadBfMappings(); }
     if (tab === 'orders') loadOrders();
     if (tab === 'catalog') loadCatalogTab(false);
     if (tab === 'settings') loadSettings();
@@ -1048,6 +1081,11 @@ function hideError(bannerId) {
 }
 
 // -----------------------------------------------------------------------
+// Size error data map (avoids inline JSON in onclick attributes)
+// -----------------------------------------------------------------------
+const _sizeErrorData = {};
+
+// -----------------------------------------------------------------------
 // Loading / empty / error state helpers
 // -----------------------------------------------------------------------
 function loadingHTML(cols) {
@@ -1065,6 +1103,9 @@ fetch('/api/favorites').then(r => r.json()).then(arr => { _favorites = new Set(a
 
 let _vendorFavorites = new Set();
 fetch('/api/vendor-favorites').then(r => r.json()).then(arr => { _vendorFavorites = new Set(arr.map(String)); }).catch(() => {});
+
+let _categoryFavorites = new Set();
+fetch('/api/category-favorites').then(r => r.json()).then(arr => { _categoryFavorites = new Set(arr.map(String)); }).catch(() => {});
 
 function toggleFavorite(productId, el) {
   const pid = String(productId);
@@ -1101,6 +1142,7 @@ function _getSortVal(p, col) {
   switch (col) {
     case 'title': return (p.title || '').toLowerCase();
     case 'vendor': return (p.vendor || '').toLowerCase();
+    case 'gender': return (p.gender || '').toLowerCase();
     case 'category': return (p.bluefly_category || '').toLowerCase();
     case 'size_field': return (p.size_field || '').toLowerCase();
     case 'variants': return p.variant_count || 0;
@@ -1338,6 +1380,153 @@ function loadProducts(updatedProductId, patchFields) {
   }
 }
 
+async function loadSizeDiff() {
+  if (!_allPublishedProducts.length) {
+    toast('Load published products first', 'error');
+    return;
+  }
+
+  const panel = document.getElementById('size-diff-panel');
+  const loading = document.getElementById('size-diff-loading');
+  const results = document.getElementById('size-diff-results');
+  const summary = document.getElementById('size-diff-summary');
+  const fill = document.getElementById('size-diff-fill');
+  const status = document.getElementById('size-diff-status');
+
+  panel.style.display = 'block';
+  loading.style.display = 'block';
+  results.style.display = 'none';
+  results.innerHTML = '';
+  summary.textContent = '';
+  fill.style.width = '5%';
+  status.textContent = 'Building product map...';
+
+  // Build {product_id: {title, sizes}} from already-loaded published products
+  const dashProducts = {};
+  for (const p of _allPublishedProducts) {
+    if (p.sync_status !== 'pushed' && p.sync_status !== 'size_error') continue;
+    const sizes = (p.variants_detail || []).map(v => v.title).filter(Boolean);
+    dashProducts[String(p.id)] = { title: p.title || '', sizes };
+  }
+
+  fill.style.width = '10%';
+  status.textContent = `${Object.keys(dashProducts).length} pushed products, fetching portal...`;
+
+  try {
+    const resp = await fetch('/api/products/size-diff', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ products: dashProducts }),
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let dashTotal = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let msg;
+        try { msg = JSON.parse(line); } catch { continue; }
+
+        if (msg.type === 'progress') {
+          status.textContent = msg.message || 'Working...';
+          if (msg.step === 'portal') {
+            dashTotal = msg.dash_total || dashTotal;
+            const fetched = msg.portal_fetched || 0;
+            const est = Math.max(dashTotal, fetched + 50);
+            const pct = 10 + Math.min(85, (fetched / est) * 85);
+            fill.style.width = pct.toFixed(0) + '%';
+          } else if (msg.step === 'comparing') {
+            fill.style.width = '97%';
+          }
+        } else if (msg.type === 'error') {
+          loading.style.display = 'none';
+          toast(msg.error, 'error');
+          return;
+        } else if (msg.type === 'complete') {
+          fill.style.width = '100%';
+          setTimeout(() => { loading.style.display = 'none'; }, 300);
+
+          const onPortal = msg.on_portal || [];
+          const hanging = msg.hanging || [];
+          const portalOnly = msg.portal_only || [];
+          const withMissingSizes = onPortal.filter(p => p.missing_sizes && p.missing_sizes.length);
+
+          summary.textContent = `${msg.dash_count} pushed \u00b7 ${onPortal.length} on portal \u00b7 ${hanging.length} hanging \u00b7 ${msg.portal_count} total on portal`;
+
+          let html = '';
+
+          // Hanging products — pushed but not on portal
+          if (hanging.length) {
+            html += `<div style="margin-bottom:16px;">
+              <div style="font-weight:600;font-size:13px;margin-bottom:6px;color:var(--danger);">Hanging — Pushed but NOT on Portal (${hanging.length})</div>
+              <table class="data-table"><thead><tr><th>Title</th><th>Product ID</th><th>SellerSKU</th><th>Sizes</th></tr></thead><tbody>
+              ${hanging.map(p => `<tr>
+                <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${(p.title||'').replace(/"/g,'&quot;')}">${p.title||''}</td>
+                <td style="font-size:11px;">${p.product_id||''}</td>
+                <td style="font-size:11px;font-family:monospace;">${p.seller_sku||''}</td>
+                <td style="font-size:12px;">${(p.dash_sizes||[]).join(', ')}</td>
+              </tr>`).join('')}
+              </tbody></table></div>`;
+          } else {
+            html += `<div style="margin-bottom:16px;color:var(--text-muted);font-size:13px;">No hanging products — all pushed products found on portal.</div>`;
+          }
+
+          // Products with missing sizes
+          if (withMissingSizes.length) {
+            html += `<div style="margin-bottom:16px;">
+              <details>
+                <summary style="font-weight:600;font-size:13px;cursor:pointer;user-select:none;color:var(--warning);">Missing Sizes — On Portal but sizes differ (${withMissingSizes.length})</summary>
+                <table class="data-table" style="margin-top:6px;"><thead><tr><th>Title</th><th>SellerSKU</th><th>Dashboard</th><th>Portal</th><th style="color:var(--danger);">Missing</th></tr></thead><tbody>
+                ${withMissingSizes.map(p => `<tr>
+                  <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${(p.title||'').replace(/"/g,'&quot;')}">${p.title||''}</td>
+                  <td style="font-size:11px;font-family:monospace;">${p.seller_sku||''}</td>
+                  <td style="font-size:12px;">${(p.dash_sizes||[]).join(', ')}</td>
+                  <td style="font-size:12px;">${(p.portal_sizes||[]).join(', ')}</td>
+                  <td style="font-size:12px;font-weight:600;color:var(--danger);">${(p.missing_sizes||[]).join(', ')}</td>
+                </tr>`).join('')}
+                </tbody></table>
+              </details></div>`;
+          }
+
+          // Portal-only products
+          if (portalOnly.length) {
+            html += `<div style="margin-bottom:16px;">
+              <details>
+                <summary style="font-weight:600;font-size:13px;cursor:pointer;user-select:none;">Portal Only — Not in dashboard (${portalOnly.length})</summary>
+                <table class="data-table" style="margin-top:6px;"><thead><tr><th>SellerSKU</th><th>Variants</th><th>Sizes</th></tr></thead><tbody>
+                ${portalOnly.map(p => `<tr>
+                  <td style="font-size:11px;font-family:monospace;">${p.seller_sku||''}</td>
+                  <td>${p.portal_variants||0}</td>
+                  <td style="font-size:12px;">${(p.portal_sizes||[]).join(', ')}</td>
+                </tr>`).join('')}
+                </tbody></table>
+              </details></div>`;
+          }
+
+          // Matched count
+          const matched = onPortal.length - withMissingSizes.length;
+          if (matched > 0) {
+            html += `<div style="font-size:13px;color:var(--text-muted);">${matched} products fully matched (on portal with all sizes).</div>`;
+          }
+
+          results.innerHTML = html;
+          results.style.display = 'block';
+        }
+      }
+    }
+  } catch (e) {
+    loading.style.display = 'none';
+    toast('Size diff failed: ' + e.message, 'error');
+  }
+}
+
 async function loadPublished(force = true) {
   if (_publishedLoading) return;
   if (!force && _publishedLoaded && _allPublishedProducts.length) {
@@ -1350,7 +1539,7 @@ async function loadPublished(force = true) {
   _publishedLoading = true;
   _publishedLoaded = false;
   hideError('published-error');
-  document.getElementById('published-tbody').innerHTML = loadingHTML(10);
+  document.getElementById('published-tbody').innerHTML = loadingHTML(11);
   document.getElementById('pub-count-label').textContent = 'Loading…';
   _pageState['published'] = { page: 1 };
   _allPublishedProducts = [];
@@ -1374,8 +1563,7 @@ async function loadPublished(force = true) {
     _publishedProducts = _allPublishedProducts.slice();
     _buildCatalogIndex();
     populateColumnFilters('published');
-    _updatePublishedCounts();
-    renderPublishedPage(1);
+    filterPublished();
 
     // Fetch catalog in background for live-status badges
     _fetchCatalog().then(catalogData => {
@@ -1395,7 +1583,7 @@ async function loadPublished(force = true) {
   } catch (e) {
     _publishedLoading = false;
     showError('published-error', e.message);
-    document.getElementById('published-tbody').innerHTML = emptyHTML(11, 'Could not load products');
+    document.getElementById('published-tbody').innerHTML = emptyHTML(12, 'Could not load products');
   }
 }
 
@@ -1409,7 +1597,7 @@ async function loadUnpublished(force = true) {
   _unpublishedLoading = true;
   _unpublishedLoaded = false;
   hideError('unpublished-error');
-  document.getElementById('unpublished-tbody').innerHTML = loadingHTML(9);
+  document.getElementById('unpublished-tbody').innerHTML = loadingHTML(10);
   document.getElementById('unpub-count-label').textContent = 'Loading…';
   _pageState['unpublished'] = { page: 1 };
   _allUnpublishedProducts = [];
@@ -1426,15 +1614,18 @@ async function loadUnpublished(force = true) {
         // Re-apply filters but don't reset page during streaming
         const q = document.getElementById('unpub-search').value.toLowerCase();
         const reason = document.getElementById('unpub-reason-filter').value;
+        const sfGender = _getColFilter('unpub-filter-gender');
         _unpublishedProducts = _allUnpublishedProducts.filter(p => {
           if (q && !_matchesSearch(p, q)) return false;
           if (reason === 'eligible' && !p.push_eligible) return false;
           if (reason === 'no-category' && p.bluefly_category) return false;
           if (reason === 'default-variants' && !p.has_default_variants) return false;
+          if (reason === 'no-default' && p.has_default_variants) return false;
           if (reason === 'no-images' && p.has_images) return false;
           if (reason === 'bad-image' && !(p.has_images && !p.valid_image_format)) return false;
           if (reason === 'no-qty' && p.has_quantity) return false;
           if (reason === 'no-brand-id' && p.brand_product_id) return false;
+          if (sfGender && (p.gender || '') !== sfGender) return false;
           return true;
         });
         _updateUnpublishedCounts();
@@ -1452,14 +1643,17 @@ async function loadUnpublished(force = true) {
   } catch (e) {
     _unpublishedLoading = false;
     showError('unpublished-error', e.message);
-    document.getElementById('unpublished-tbody').innerHTML = emptyHTML(10, 'Could not load products');
+    document.getElementById('unpublished-tbody').innerHTML = emptyHTML(11, 'Could not load products');
   }
 }
 
 function _matchesSearch(p, q) {
-  return p.title.toLowerCase().includes(q) ||
-    p.vendor.toLowerCase().includes(q) ||
-    (p.first_sku || '').toLowerCase().includes(q) ||
+  return String(p.title || '').toLowerCase().includes(q) ||
+    String(p.vendor || '').toLowerCase().includes(q) ||
+    String(p.first_sku || '').toLowerCase().includes(q) ||
+    String(p.bluefly_category || '').toLowerCase().includes(q) ||
+    String(p.size_field || '').toLowerCase().includes(q) ||
+    String(p.brand_product_id || '').toLowerCase().includes(q) ||
     String(p.id).includes(q);
 }
 
@@ -1472,6 +1666,7 @@ function filterPublished() {
   const q = document.getElementById('pub-search').value.toLowerCase();
   const status = document.getElementById('pub-status-filter').value;
   const fVendor = _getColFilter('pub-filter-vendor');
+  const fGender = _getColFilter('pub-filter-gender');
   const fCategory = _getColFilter('pub-filter-category');
   const fStatus = _getColFilter('pub-filter-status');
   const fSizeErr = _getColFilter('pub-filter-sizeerr');
@@ -1483,6 +1678,7 @@ function filterPublished() {
     if (status === 'error' && !p.invalid && p.sync_status !== 'error') return false;
     if (status && status !== 'error' && status !== 'size_error' && p.sync_status !== status) return false;
     if (fVendor && p.vendor !== fVendor) return false;
+    if (fGender && (p.gender || '') !== fGender) return false;
     if (fCategory && (p.bluefly_category || '') !== fCategory) return false;
     if (fStatus && (p.sync_status || '') !== fStatus) return false;
     if (fSizeErr === 'has' && !(p.size_errors && p.size_errors.length)) return false;
@@ -1516,6 +1712,7 @@ function filterUnpublished() {
   const q = document.getElementById('unpub-search').value.toLowerCase();
   const reason = document.getElementById('unpub-reason-filter').value;
   const fVendor = _getColFilter('unpub-filter-vendor');
+  const fGender = _getColFilter('unpub-filter-gender');
   const fCategory = _getColFilter('unpub-filter-category');
   const fEligible = [...document.querySelectorAll('#eligible-dropdown input:checked')].map(c => c.value);
   const fAction = _getColFilter('unpub-filter-action');
@@ -1524,16 +1721,19 @@ function filterUnpublished() {
     if (reason === 'eligible' && !p.push_eligible) return false;
     if (reason === 'no-category' && p.bluefly_category) return false;
     if (reason === 'default-variants' && !p.has_default_variants) return false;
+    if (reason === 'no-default' && p.has_default_variants) return false;
     if (reason === 'no-images' && p.has_images) return false;
     if (reason === 'bad-image' && !(p.has_images && !p.valid_image_format)) return false;
     if (reason === 'no-qty' && p.has_quantity) return false;
     if (reason === 'no-brand-id' && p.brand_product_id) return false;
     if (fVendor && p.vendor !== fVendor) return false;
+    if (fGender && (p.gender || '') !== fGender) return false;
     if (fCategory && (p.bluefly_category || '') !== fCategory) return false;
     for (const f of fEligible) {
       if (f === 'no-category' && p.bluefly_category) return false;
       if (f === 'has-category' && !p.bluefly_category) return false;
       if (f === 'default-variants' && !p.has_default_variants) return false;
+      if (f === 'no-default' && p.has_default_variants) return false;
       if (f === 'no-images' && p.has_images) return false;
       if (f === 'has-images' && !p.has_images) return false;
       if (f === 'bad-image' && !(p.has_images && !p.valid_image_format)) return false;
@@ -1601,6 +1801,7 @@ function populateColumnFilters(table) {
   if (table === 'published') {
     const products = _allPublishedProducts;
     _populateSelect('pub-filter-vendor', [...new Set(products.map(p => p.vendor).filter(Boolean))].sort());
+    _populateSelect('pub-filter-gender', [...new Set(products.map(p => p.gender).filter(Boolean))].sort());
     _populateSelect('pub-filter-category', [...new Set(products.map(p => p.bluefly_category).filter(Boolean))].sort());
     const statuses = [...new Set(products.map(p => p.sync_status).filter(Boolean))].sort();
     _populateSelect('pub-filter-status', statuses);
@@ -1613,6 +1814,7 @@ function populateColumnFilters(table) {
   } else {
     const products = _allUnpublishedProducts;
     _populateSelect('unpub-filter-vendor', [...new Set(products.map(p => p.vendor).filter(Boolean))].sort());
+    _populateSelect('unpub-filter-gender', [...new Set(products.map(p => p.gender).filter(Boolean))].sort());
     _populateSelect('unpub-filter-category', [...new Set(products.map(p => p.bluefly_category).filter(Boolean))].sort());
   }
 }
@@ -2090,7 +2292,7 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
     if (resetBtn) resetBtn.disabled = true;
   }
   if (!products.length) {
-    tbody.innerHTML = emptyHTML(isPublished ? 13 : 10, emptyMsg || 'No products');
+    tbody.innerHTML = emptyHTML(isPublished ? 14 : 11, emptyMsg || 'No products');
     return;
   }
   tbody.innerHTML = products.map(p => {
@@ -2131,7 +2333,10 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
       const syncTitle = qtyMismatch
         ? `Qty mismatch: Shopify=${shopifyQty}, Bluefly=${catalogQty}. Click to sync.`
         : 'Sync qty+price to Bluefly';
-      actions = `<button class="btn ${syncBtnClass} btn-sm" onclick="syncQtyPrice(${p.id}, this)" title="${syncTitle}">Sync</button>
+      const hasChanges = p.title_overridden || p.vendor_overridden || p.price_overridden || p.category_overridden || p.size_field_overridden || p.brand_product_id_overridden || p.has_image_overrides;
+      const pushBtn = hasChanges ? `<button class="btn btn-primary btn-sm" onclick="pushProduct(${p.id}, this)" title="Re-push with overrides">Push</button>` : '';
+      actions = `${pushBtn}
+                 <button class="btn ${syncBtnClass} btn-sm" onclick="syncQtyPrice(${p.id}, this)" title="${syncTitle}">Sync</button>
                  <button class="btn btn-outline btn-sm" onclick="resetSync(${p.id}, this)" title="Remove from Published (clears sync log)">Reset</button>`;
     } else {
       actions = `<button class="btn btn-primary btn-sm" onclick="pushProduct(${p.id}, this)" title="Push to Bluefly">Push</button>`;
@@ -2147,23 +2352,18 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
       priceDisplay = '$' + parseFloat(p.first_price).toFixed(2);
     }
 
-    // Size errors column (published tab only)
+    // Size errors column (published tab only) — clickable badge opens fix modal
     let sizeErrCol = '';
     if (isPublished) {
       if (p.size_errors && p.size_errors.length) {
         const n = p.size_errors.length;
         const hasSuggestion = p.size_errors.some(e => e.suggestion);
-        const tooltipLines = p.size_errors.map(e => {
-          let html = `<div class="tooltip-error-line"><span class="tooltip-error-label">${esc(e.shopify_size)}</span> \u2192 ${esc(e.field_name)}: ${esc(e.error)}`;
-          if (e.suggestion) html += `<span class="tooltip-hint">\u26a0 ${esc(e.suggestion)}</span>`;
-          html += '</div>';
-          return html;
-        }).join('');
         const badgeClass = hasSuggestion ? 'badge-error' : 'badge-warning';
         const label = hasSuggestion ? `${n} miscat.` : `${n} variant${n > 1 ? 's' : ''}`;
-        sizeErrCol = `<td><span class="has-tooltip"><span class="badge ${badgeClass}" style="cursor:help">${label}</span><span class="tooltip-content">${tooltipLines}</span></span></td>`;
+        _sizeErrorData[p.id] = { title: p.title || '', errors: p.size_errors };
+        sizeErrCol = `<td><span class="badge ${badgeClass}" style="cursor:pointer" onclick="event.stopPropagation();openFixSizeModal(${p.id})">${label}</span></td>`;
       } else {
-        sizeErrCol = '<td><span style="color:var(--text-muted)">—</span></td>';
+        sizeErrCol = '<td><span style="color:var(--text-muted)">\u2014</span></td>';
       }
     }
 
@@ -2187,13 +2387,14 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
       ${chkCol}<td>${img}</td>
       <td style="white-space:normal;min-width:200px"><span style="cursor:pointer;text-decoration:underline dotted;" onclick="editTitle(${p.id}, this)"><strong>${esc(p.title)}</strong>${titleStar}</span> <a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:var(--text-muted);font-size:11px;">&#8599;</a><br><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="font-size:11px;color:var(--text-muted);text-decoration:none;">ID: ${p.id}</a> ${bpidDisplay}</td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editVendor(${p.id}, this)">${esc(p.vendor)}${vendorStar}${vendorFavBtn}</td>
+      <td style="font-size:12px;cursor:pointer;text-decoration:underline dotted;${p.gender_overridden ? 'color:var(--primary);font-weight:600;' : ''}" onclick="editGender(${p.id}, this)" title="${p.gender_overridden ? 'Override set' : 'Click to override'}">${esc(p.gender || '-')}</td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editCategory(${p.id}, '${esc(p.bluefly_category || '')}')">
         <span class="cat-cell" data-catid="${esc(p.bluefly_category || '')}">${esc(p.bluefly_category || '-')}</span>${p.category_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Category overridden">&#9733;</span>' : ''}${favBtn}
       </td>
       <td style="cursor:pointer;text-decoration:underline dotted;font-size:12px;" onclick="editSizeField(${p.id}, '${esc(p.size_field || '')}', '${esc(p.bluefly_category || '')}')">
         ${esc(p.size_field || '-')}${p.size_field_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Size field overridden">&#9733;</span>' : ''}
       </td>
-      <td>${p.variant_count}</td>
+      <td title="${(p.variants_detail || []).map(v => v.title).filter(Boolean).join(', ')}">${p.variant_count}</td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editPrice(${p.id}, this)">${priceDisplay}${priceStar}</td>
       <td>${p.total_quantity}</td>
       <td>${statusBadge}</td>
@@ -2212,7 +2413,7 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
   document.getElementById('selected-count').textContent = '0';
   document.getElementById('push-selected-btn').disabled = true;
   if (!products.length) {
-    tbody.innerHTML = emptyHTML(10, emptyMsg || 'No products');
+    tbody.innerHTML = emptyHTML(11, emptyMsg || 'No products');
     return;
   }
   tbody.innerHTML = products.map(p => {
@@ -2267,13 +2468,14 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
       <td>${img}</td>
       <td style="white-space:normal;min-width:200px"><span style="cursor:pointer;text-decoration:underline dotted;" onclick="editTitle(${p.id}, this)"><strong>${esc(p.title)}</strong>${titleStar}</span> <a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:var(--text-muted);font-size:11px;">&#8599;</a><br><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="font-size:11px;color:var(--text-muted);text-decoration:none;">ID: ${p.id}</a> ${bpidDisplay}</td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editVendor(${p.id}, this)">${esc(p.vendor)}${vendorStar}${vendorFavBtn}</td>
+      <td style="font-size:12px;cursor:pointer;text-decoration:underline dotted;${p.gender_overridden ? 'color:var(--primary);font-weight:600;' : ''}" onclick="editGender(${p.id}, this)" title="${p.gender_overridden ? 'Override set' : 'Click to override'}">${esc(p.gender || '-')}</td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editCategory(${p.id}, '${esc(p.bluefly_category || '')}')">
         <span class="cat-cell" data-catid="${esc(p.bluefly_category || '')}">${esc(p.bluefly_category || '-')}</span>${p.category_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Category overridden">&#9733;</span>' : ''}${favBtn}
       </td>
       <td style="cursor:pointer;text-decoration:underline dotted;font-size:12px;" onclick="editSizeField(${p.id}, '${esc(p.size_field || '')}', '${esc(p.bluefly_category || '')}')">
         ${esc(p.size_field || '-')}${p.size_field_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Size field overridden">&#9733;</span>' : ''}
       </td>
-      <td>${p.variant_count}</td>
+      <td title="${(p.variants_detail || []).map(v => v.title).filter(Boolean).join(', ')}">${p.variant_count}</td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editPrice(${p.id}, this)">${priceDisplay}${priceStar}</td>
       <td>${p.total_quantity}</td>
       <td>${eligBadge}</td>
@@ -2287,6 +2489,7 @@ function updateSelectedCount() {
   const checked = document.querySelectorAll('.unpub-row-chk:checked').length;
   document.getElementById('selected-count').textContent = checked;
   document.getElementById('push-selected-btn').disabled = checked === 0;
+  document.getElementById('bulk-cat-unpub-btn').disabled = checked === 0;
   const all = document.querySelectorAll('.unpub-row-chk:not(:disabled)');
   const selectAll = document.getElementById('unpub-select-all');
   if (selectAll) selectAll.indeterminate = checked > 0 && checked < all.length;
@@ -2304,10 +2507,12 @@ async function pushSelected() {
   const ids = checkboxes.map(c => parseInt(c.dataset.id));
   const btn = document.getElementById('push-selected-btn');
   btn.disabled = true;
-  btn.innerHTML = `<span class="spinner"></span> Pushing ${ids.length}…`;
-  let done = 0;
+  btn.innerHTML = `<span class="spinner"></span> Pushing 0/${ids.length}…`;
+  let done = 0, failed = 0;
   const pushedIds = [];
-  for (const productId of ids) {
+  const CONCURRENCY = 3;
+
+  async function pushOne(productId) {
     try {
       const data = await apiPost('/api/products/push', {product_id: productId});
       if (data.success) {
@@ -2317,20 +2522,26 @@ async function pushSelected() {
         pushedIds.push(productId);
       } else {
         toast(`${productId}: ${data.error || 'failed'}`, 'error');
+        failed++;
       }
     } catch (e) {
       toast(`${productId}: ${e.message}`, 'error');
+      failed++;
     }
-    btn.innerHTML = `<span class="spinner"></span> Pushing ${done}/${ids.length}…`;
+    btn.innerHTML = `<span class="spinner"></span> Pushing ${done + failed}/${ids.length}…`;
   }
+
+  for (let i = 0; i < ids.length; i += CONCURRENCY) {
+    await Promise.all(ids.slice(i, i + CONCURRENCY).map(pushOne));
+  }
+
   btn.innerHTML = `Push Selected (<span id="selected-count">0</span>)`;
   btn.disabled = true;
-  toast(`Pushed ${done} of ${ids.length} products`);
+  toast(`Pushed ${done} of ${ids.length} products` + (failed ? ` (${failed} failed)` : ''));
   for (const id of pushedIds) {
     const idx = _allUnpublishedProducts.findIndex(p => p.id === id);
     if (idx >= 0) _allUnpublishedProducts.splice(idx, 1);
   }
-  document.getElementById('unpub-reason-filter').value = '';
   filterUnpublished();
   _publishedLoaded = false;
 }
@@ -2401,8 +2612,7 @@ function editSizeField(productId, currentField, categoryId) {
         // Find the category-default field (first valid match)
         const isDefault = categoryId && isValid && sorted.find(s => s.target_ids && s.target_ids.includes(categoryId))?.field_name === sf.field_name;
         if (isValid) {
-          return `<div class="sf-item" data-field="${sf.field_name}" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--border,#eee);font-size:13px;${isCurrent ? 'background:var(--accent-bg,#e8f0fe);' : ''}"
-                onmouseover="this.style.background='var(--accent-bg,#e8f0fe)'" onmouseout="this.style.background='${isCurrent ? 'var(--accent-bg,#e8f0fe)' : ''}'">
+          return `<div class="sf-item" data-field="${sf.field_name}" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--border,#eee);font-size:13px;${isCurrent ? 'background:var(--accent-bg,#e8f0fe);' : ''}">
             <strong>${sf.field_name}</strong> <span style="color:var(--text-muted)">${sf.display_name}</span>${isDefault ? ' <span style="color:var(--accent);font-size:10px;font-weight:600;">(recommended)</span>' : ''}
           </div>`;
         } else {
@@ -2543,6 +2753,67 @@ function editVendor(productId, cellEl) {
     }).then(() => {
       overlay.remove();
       toast('Vendor override removed');
+      _unpublishedLoaded = false;
+      _publishedLoaded = false;
+      const pubTab = document.getElementById('tab-published');
+      if (pubTab && pubTab.classList.contains('active')) loadPublished(true);
+      else loadUnpublished(true);
+    });
+  });
+}
+
+// ---- Gender override editor ----
+function editGender(productId, cellEl) {
+  const product = [..._allUnpublishedProducts, ..._allPublishedProducts].find(p => p.id === productId);
+  const current = product ? (product.gender || '') : '';
+  const genderOptions = ['Mens', 'Womens', 'Unisex'];
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:400px;">
+      <h4>Edit Gender</h4>
+      <div class="modal-subtitle">Product ${productId}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
+        ${genderOptions.map(g => `<button class="modal-btn ${g === current ? 'modal-btn-primary' : 'modal-btn-cancel'}" style="flex:1;min-width:100px;justify-content:center;" data-gender="${g}">${g}</button>`).join('')}
+      </div>
+      <input type="text" id="gender-override-input" value="${esc(current)}" placeholder="Custom gender..." style="margin-bottom:8px;">
+      <div class="modal-actions">
+        <button class="modal-btn modal-btn-primary" id="gender-save-btn">Save</button>
+        <div class="modal-actions-right">
+          <button class="modal-btn modal-btn-danger" id="gender-remove-btn">Remove</button>
+          <button class="modal-btn modal-btn-cancel" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  const input = document.getElementById('gender-override-input');
+
+  // Quick-select buttons
+  overlay.querySelectorAll('[data-gender]').forEach(btn => {
+    btn.addEventListener('click', () => { input.value = btn.dataset.gender; });
+  });
+
+  document.getElementById('gender-save-btn').addEventListener('click', () => {
+    const val = input.value.trim();
+    if (!val) return;
+    fetch('/api/gender-overrides').then(r => r.json()).then(overrides => {
+      overrides[String(productId)] = val;
+      return fetch('/api/gender-overrides', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(overrides) });
+    }).then(() => {
+      overlay.remove();
+      toast('Gender override saved');
+      loadProducts(productId, { gender: val, gender_overridden: true });
+    });
+  });
+
+  document.getElementById('gender-remove-btn').addEventListener('click', () => {
+    fetch('/api/gender-overrides').then(r => r.json()).then(overrides => {
+      delete overrides[String(productId)];
+      return fetch('/api/gender-overrides', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(overrides) });
+    }).then(() => {
+      overlay.remove();
+      toast('Gender override removed');
       _unpublishedLoaded = false;
       _publishedLoaded = false;
       const pubTab = document.getElementById('tab-published');
@@ -2739,6 +3010,16 @@ function editPrice(productId, cellEl) {
 function editCategory(productId, currentCat) {
   const load = _categoryMap ? Promise.resolve(_categoryMap) : fetch('/api/category-list').then(r => r.json()).then(m => { _categoryMap = m; return m; });
   load.then(catMap => {
+    // Look up product title for keyword-based category suggestions
+    const product = [...(_allPublishedProducts || []), ...(_allUnpublishedProducts || [])].find(p => p.id === productId);
+    const productTitle = product ? (product.title || '') : '';
+    const _stopWords = new Set(['in','the','a','an','of','for','and','with','by','to','from',
+      'mens','womens','women','men','unisex','kids','new','designer','luxury','authentic',
+      'size','color','style','made','italy','france','nwt','nib']);
+    const titleWords = productTitle.toLowerCase().split(/[\s/\-–,()]+/)
+      .filter(w => w.length > 2 && !_stopWords.has(w))
+      .map(w => w.replace(/s$/, '')); // basic stemming: "sneakers" → "sneaker"
+
     // Build modal
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999;';
@@ -2746,7 +3027,8 @@ function editCategory(productId, currentCat) {
     card.style.cssText = 'background:#fff;border-radius:14px;padding:32px;width:520px;max-height:70vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.15),0 0 0 1px rgba(0,0,0,.05);';
     card.innerHTML = `
       <h3 style="margin:0 0 6px;font-size:18px;font-weight:700;letter-spacing:-0.3px;color:#111827;">Select Category</h3>
-      <div style="font-size:13px;color:var(--text-muted);margin-bottom:20px;">Current: <strong>${currentCat || 'none'}</strong>${catMap[currentCat] ? ' — ' + catMap[currentCat] : ''}</div>
+      <div style="font-size:13px;color:var(--text-muted);margin-bottom:${titleWords.length ? '8' : '20'}px;">Current: <strong>${currentCat || 'none'}</strong>${catMap[currentCat] ? ' — ' + catMap[currentCat] : ''}</div>
+      ${titleWords.length ? '<div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">Keywords from title: <strong>' + titleWords.slice(0, 6).join('</strong>, <strong>') + '</strong></div>' : ''}
       <div style="display:flex;gap:10px;margin-bottom:16px;">
         <input id="cat-search" type="text" placeholder="Search by name or ID..." style="flex:1;padding:11px 14px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;background:#fafafa;transition:border-color .15s,box-shadow .15s;" onfocus="this.style.borderColor='var(--primary)';this.style.boxShadow='0 0 0 3px rgba(37,99,235,.1)';this.style.background='#fff'" onblur="this.style.borderColor='var(--border)';this.style.boxShadow='none';this.style.background='#fafafa'" autofocus>
         <button class="modal-btn modal-btn-cancel" onclick="this.closest('div').parentElement.parentElement.remove()">Cancel</button>
@@ -2757,6 +3039,14 @@ function editCategory(productId, currentCat) {
     overlay.appendChild(card);
     overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
     document.body.appendChild(overlay);
+
+    // Title keyword match: count how many title words appear in category path
+    function titleMatch(path) {
+      const lp = path.toLowerCase();
+      let hits = 0;
+      for (const w of titleWords) { if (lp.includes(w)) hits++; }
+      return hits;
+    }
 
     // Sort by relevance: categories sharing more path segments with current rank higher
     const curPath = catMap[currentCat] || '';
@@ -2770,6 +3060,12 @@ function editCategory(productId, currentCat) {
       return shared;
     }
     const entries = Object.entries(catMap).sort((a, b) => {
+      // Favorites first, then title keyword matches, then path relevance, then alphabetical
+      const fa = _categoryFavorites.has(a[0]) ? 1 : 0;
+      const fb = _categoryFavorites.has(b[0]) ? 1 : 0;
+      if (fa !== fb) return fb - fa;
+      const ta = titleMatch(a[1]), tb = titleMatch(b[1]);
+      if (ta !== tb) return tb - ta;
       const ra = relevance(a[1]), rb = relevance(b[1]);
       if (ra !== rb) return rb - ra;
       return a[1].localeCompare(b[1]);
@@ -2777,20 +3073,52 @@ function editCategory(productId, currentCat) {
     const listEl = document.getElementById('cat-list');
     const searchEl = document.getElementById('cat-search');
 
+    window._toggleCatFav = function(catId, ev) {
+      ev.stopPropagation();
+      const wasFav = _categoryFavorites.has(catId);
+      if (wasFav) _categoryFavorites.delete(catId);
+      else _categoryFavorites.add(catId);
+      fetch('/api/category-favorites', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify([..._categoryFavorites]) });
+      // Update star in-place instead of full re-render
+      const star = ev.target.closest('span');
+      if (star) {
+        const isFav = !wasFav;
+        star.style.color = isFav ? '#f59e0b' : '#d1d5db';
+        star.textContent = isFav ? '\u2605' : '\u2606';
+        star.title = isFav ? 'Remove from favorites' : 'Add to favorites';
+        const item = star.closest('.cat-item');
+        if (item && item.dataset.id !== currentCat) {
+          item.style.background = isFav ? '#fffbeb' : '';
+        }
+      }
+    };
+
     function renderList(filter) {
       const f = (filter || '').toLowerCase();
-      const matches = f ? entries.filter(([id, path]) => id.includes(f) || path.toLowerCase().includes(f)) : entries;
+      let matches = f ? entries.filter(([id, path]) => id.includes(f) || path.toLowerCase().includes(f)) : entries;
+      // Re-sort so favorites stay on top even after filter
+      matches = [...matches].sort((a, b) => {
+        const fa = _categoryFavorites.has(a[0]) ? 1 : 0;
+        const fb = _categoryFavorites.has(b[0]) ? 1 : 0;
+        if (fa !== fb) return fb - fa;
+        return 0; // preserve existing order
+      });
       listEl.innerHTML = matches.slice(0, 100).map(([id, path]) => {
+        const isFav = _categoryFavorites.has(id);
         const rel = relevance(path);
+        const tmatch = titleMatch(path);
+        const tmBadge = tmatch > 0 ? `<span style="background:#dcfce7;color:#16a34a;font-size:10px;padding:1px 5px;border-radius:3px;margin-right:4px;" title="${tmatch} keyword match${tmatch > 1 ? 'es' : ''}">${tmatch} kw</span>` : '';
         const relDot = rel > 0 ? '<span style="color:var(--accent);margin-right:4px;" title="' + rel + ' shared segments">' + '●'.repeat(Math.min(rel, 4)) + '</span>' : '';
-        return `<div class="cat-item" data-id="${id}" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--border,#eee);font-size:13px;${id === currentCat ? 'background:var(--accent-bg,#e8f0fe);' : ''}"
-              onmouseover="this.style.background='var(--accent-bg,#e8f0fe)'" onmouseout="this.style.background='${id === currentCat ? 'var(--accent-bg,#e8f0fe)' : ''}'">
-          ${relDot}<strong>${id}</strong> <span style="color:var(--text-muted)">${path}</span>
+        const star = `<span onclick="_toggleCatFav('${id}', event)" style="cursor:pointer;color:${isFav ? '#f59e0b' : '#d1d5db'};font-size:18px;padding:2px 6px;flex-shrink:0;" title="${isFav ? 'Remove from favorites' : 'Add to favorites'}">${isFav ? '\u2605' : '\u2606'}</span>`;
+        return `<div class="cat-item" data-id="${id}" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--border,#eee);font-size:13px;display:flex;align-items:center;justify-content:space-between;gap:6px;${id === currentCat ? 'background:var(--accent-bg,#e8f0fe);' : ''}${isFav && !f ? 'background:#fffbeb;' : ''}">
+          <span style="flex:1;min-width:0;">${tmBadge}${relDot}<strong>${id}</strong> <span style="color:var(--text-muted)">${path}</span></span>
+          ${star}
         </div>`;
       }).join('') + (matches.length > 100 ? '<div style="padding:6px 10px;color:var(--text-muted);font-size:12px;">...and ' + (matches.length - 100) + ' more — refine your search</div>' : '');
     }
     renderList('');
-    searchEl.addEventListener('input', () => renderList(searchEl.value));
+    let _catSearchTimer;
+    searchEl.addEventListener('input', () => { clearTimeout(_catSearchTimer); _catSearchTimer = setTimeout(() => renderList(searchEl.value), 150); });
     searchEl.focus();
 
     function saveOverride(catId) {
@@ -2831,10 +3159,126 @@ function editCategory(productId, currentCat) {
     }
 
     listEl.addEventListener('click', e => {
+      if (e.target.closest('[onclick*="_toggleCatFav"]')) return;
       const item = e.target.closest('.cat-item');
       if (item) saveOverride(item.dataset.id);
     });
     document.getElementById('cat-remove-btn').addEventListener('click', () => saveOverride(null));
+  });
+}
+
+function bulkEditCategory(tab) {
+  const chkClass = tab === 'published' ? '.pub-row-chk:checked' : '.unpub-row-chk:checked';
+  const productIds = [...document.querySelectorAll(chkClass)].map(c => parseInt(c.dataset.id));
+  if (!productIds.length) return;
+
+  const load = _categoryMap ? Promise.resolve(_categoryMap) : fetch('/api/category-list').then(r => r.json()).then(m => { _categoryMap = m; return m; });
+  load.then(catMap => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999;';
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#fff;border-radius:14px;padding:32px;width:520px;max-height:70vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.15),0 0 0 1px rgba(0,0,0,.05);';
+    card.innerHTML = `
+      <h3 style="margin:0 0 6px;font-size:18px;font-weight:700;letter-spacing:-0.3px;color:#111827;">Set Category for ${productIds.length} product${productIds.length > 1 ? 's' : ''}</h3>
+      <div style="font-size:13px;color:var(--text-muted);margin-bottom:20px;">Select a category to apply to all selected products.</div>
+      <div style="display:flex;gap:10px;margin-bottom:16px;">
+        <input id="bulk-cat-search" type="text" placeholder="Search by name or ID..." style="flex:1;padding:11px 14px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;background:#fafafa;transition:border-color .15s,box-shadow .15s;" onfocus="this.style.borderColor='var(--primary)';this.style.boxShadow='0 0 0 3px rgba(37,99,235,.1)';this.style.background='#fff'" onblur="this.style.borderColor='var(--border)';this.style.boxShadow='none';this.style.background='#fafafa'" autofocus>
+        <button class="modal-btn modal-btn-cancel" onclick="this.closest('div').parentElement.parentElement.remove()">Cancel</button>
+      </div>
+      <div id="bulk-cat-list" style="overflow-y:auto;flex:1;border:1.5px solid var(--border);border-radius:10px;max-height:400px;"></div>
+    `;
+    overlay.appendChild(card);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+
+    const entries = Object.entries(catMap).sort((a, b) => {
+      const fa = _categoryFavorites.has(a[0]) ? 1 : 0;
+      const fb = _categoryFavorites.has(b[0]) ? 1 : 0;
+      if (fa !== fb) return fb - fa;
+      return a[1].localeCompare(b[1]);
+    });
+    const listEl = document.getElementById('bulk-cat-list');
+    const searchEl = document.getElementById('bulk-cat-search');
+
+    function renderList(filter) {
+      const f = (filter || '').toLowerCase();
+      let matches = f ? entries.filter(([id, path]) => id.includes(f) || path.toLowerCase().includes(f)) : entries;
+      matches = [...matches].sort((a, b) => {
+        const fa = _categoryFavorites.has(a[0]) ? 1 : 0;
+        const fb = _categoryFavorites.has(b[0]) ? 1 : 0;
+        if (fa !== fb) return fb - fa;
+        return 0;
+      });
+      listEl.innerHTML = matches.slice(0, 100).map(([id, path]) => {
+        const isFav = _categoryFavorites.has(id);
+        const star = `<span onclick="_toggleCatFav('${id}', event)" style="cursor:pointer;color:${isFav ? '#f59e0b' : '#d1d5db'};font-size:18px;padding:2px 6px;flex-shrink:0;" title="${isFav ? 'Remove from favorites' : 'Add to favorites'}">${isFav ? '\u2605' : '\u2606'}</span>`;
+        return `<div class="cat-item" data-id="${id}" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--border,#eee);font-size:13px;display:flex;align-items:center;justify-content:space-between;gap:6px;${isFav && !f ? 'background:#fffbeb;' : ''}">
+          <span style="flex:1;min-width:0;"><strong>${id}</strong> <span style="color:var(--text-muted)">${path}</span></span>
+          ${star}
+        </div>`;
+      }).join('') + (matches.length > 100 ? '<div style="padding:6px 10px;color:var(--text-muted);font-size:12px;">...and ' + (matches.length - 100) + ' more — refine your search</div>' : '');
+    }
+    renderList('');
+    let _bulkCatTimer;
+    searchEl.addEventListener('input', () => { clearTimeout(_bulkCatTimer); _bulkCatTimer = setTimeout(() => renderList(searchEl.value), 150); });
+    searchEl.focus();
+
+    listEl.addEventListener('click', e => {
+      if (e.target.closest('[onclick*="_toggleCatFav"]')) return;
+      const item = e.target.closest('.cat-item');
+      if (!item) return;
+      const catId = item.dataset.id;
+      // Disable list while saving
+      listEl.style.pointerEvents = 'none';
+      listEl.style.opacity = '0.5';
+      bulkSaveCategory(catId, productIds, overlay);
+    });
+  });
+}
+
+function bulkSaveCategory(catId, productIds, overlay) {
+  fetch('/api/category-overrides').then(r => r.json()).then(overrides => {
+    productIds.forEach(id => { overrides[String(id)] = catId; });
+    return fetch('/api/category-overrides', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(overrides) });
+  }).then(() => {
+    // Auto-resolve size fields
+    const sfLoad = _sizeFieldList ? Promise.resolve(_sizeFieldList) : fetch('/api/size-field-list').then(r => r.json()).then(l => { _sizeFieldList = l; return l; });
+    return sfLoad.then(fields => {
+      const valid = fields.filter(sf => sf.target_ids && sf.target_ids.includes(catId));
+      const patch = { bluefly_category: catId, category_overridden: true };
+      if (valid.length === 1) {
+        // Batch-set size field override too
+        return fetch('/api/size-field-overrides').then(r => r.json()).then(sfo => {
+          productIds.forEach(id => { sfo[String(id)] = valid[0].field_name; });
+          return fetch('/api/size-field-overrides', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(sfo) });
+        }).then(() => {
+          patch.size_field = valid[0].field_name;
+          patch.size_field_overridden = true;
+          toast('Size field auto-set: ' + valid[0].field_name);
+          return patch;
+        });
+      }
+      return patch;
+    });
+  }).then(patch => {
+    // Update in-memory product data
+    for (const list of [_allPublishedProducts, _allUnpublishedProducts]) {
+      for (const p of list) {
+        if (productIds.includes(p.id)) Object.assign(p, patch);
+      }
+    }
+    overlay.remove();
+    // Re-render current tab
+    const pubTab = document.getElementById('tab-published');
+    if (pubTab && pubTab.classList.contains('active')) {
+      renderPublishedPage(_pageState['published'] ? _pageState['published'].page : 1);
+    } else {
+      renderUnpublishedPage(_pageState['unpublished'] ? _pageState['unpublished'].page : 1);
+    }
+    toast(`Category set for ${productIds.length} product${productIds.length > 1 ? 's' : ''}`);
+  }).catch(err => {
+    toast('Bulk category update failed: ' + err.message, 'error');
+    overlay.remove();
   });
 }
 
@@ -2889,9 +3333,12 @@ function updatePubSelectedCount() {
   const checked = document.querySelectorAll('.pub-row-chk:checked').length;
   document.getElementById('pub-selected-count').textContent = checked;
   document.getElementById('sync-selected-count').textContent = checked;
+  document.getElementById('repush-selected-count').textContent = checked;
   document.getElementById('sync-selected-btn').disabled = checked === 0;
+  document.getElementById('repush-selected-btn').disabled = checked === 0;
   document.getElementById('reset-selected-btn').disabled = checked === 0;
   document.getElementById('delete-selected-btn').disabled = checked === 0;
+  document.getElementById('bulk-cat-pub-btn').disabled = checked === 0;
   const all = document.querySelectorAll('.pub-row-chk');
   const selectAll = document.getElementById('pub-select-all');
   if (selectAll) selectAll.indeterminate = checked > 0 && checked < all.length;
@@ -2941,7 +3388,9 @@ async function syncSelectedProducts() {
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span> Syncing 0/${ids.length}…`;
   let done = 0, failed = 0;
-  for (const productId of ids) {
+  const CONCURRENCY = 3;
+
+  async function syncOne(productId) {
     try {
       const data = await apiPost('/api/products/sync-qty-price', {product_id: productId});
       if (data.success) {
@@ -2958,16 +3407,65 @@ async function syncSelectedProducts() {
     }
     btn.innerHTML = `<span class="spinner"></span> Syncing ${done + failed}/${ids.length}…`;
   }
+
+  for (let i = 0; i < ids.length; i += CONCURRENCY) {
+    await Promise.all(ids.slice(i, i + CONCURRENCY).map(syncOne));
+  }
+
   btn.innerHTML = `Sync Selected (<span id="sync-selected-count">0</span>)`;
   btn.disabled = true;
   toast(`Synced ${done} of ${ids.length} products` + (failed ? ` (${failed} failed)` : ''));
-  // Fade back in after a moment
   setTimeout(() => {
     document.querySelectorAll('.pub-row-chk').forEach(c => c.closest('tr').style.opacity = '');
   }, 1500);
   document.querySelectorAll('.pub-row-chk').forEach(c => c.checked = false);
   document.getElementById('pub-select-all').checked = false;
   updatePubSelectedCount();
+}
+
+async function repushSelectedProducts() {
+  const checkboxes = [...document.querySelectorAll('.pub-row-chk:checked')];
+  if (!checkboxes.length) return;
+  const ids = checkboxes.map(c => parseInt(c.dataset.id));
+  if (!confirm(`Re-push ${ids.length} product(s) to Bluefly?`)) return;
+  const btn = document.getElementById('repush-selected-btn');
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner"></span> Pushing 0/${ids.length}…`;
+  let done = 0, failed = 0;
+  const CONCURRENCY = 3;
+
+  async function pushOne(productId) {
+    try {
+      const data = await apiPost('/api/products/push', {product_id: productId});
+      if (data.success) {
+        const chk = document.querySelector(`.pub-row-chk[data-id="${productId}"]`);
+        if (chk) chk.closest('tr').style.opacity = '0.4';
+        done++;
+      } else {
+        toast(`${productId}: ${data.error || 'push failed'}`, 'error');
+        failed++;
+      }
+    } catch (e) {
+      toast(`${productId}: ${e.message}`, 'error');
+      failed++;
+    }
+    btn.innerHTML = `<span class="spinner"></span> Pushing ${done + failed}/${ids.length}…`;
+  }
+
+  for (let i = 0; i < ids.length; i += CONCURRENCY) {
+    await Promise.all(ids.slice(i, i + CONCURRENCY).map(pushOne));
+  }
+
+  btn.innerHTML = `Re-push Selected (<span id="repush-selected-count">0</span>)`;
+  btn.disabled = true;
+  toast(`Pushed ${done} of ${ids.length} products` + (failed ? ` (${failed} failed)` : ''));
+  setTimeout(() => {
+    document.querySelectorAll('.pub-row-chk').forEach(c => c.closest('tr').style.opacity = '');
+  }, 1500);
+  document.querySelectorAll('.pub-row-chk').forEach(c => c.checked = false);
+  document.getElementById('pub-select-all').checked = false;
+  updatePubSelectedCount();
+  loadPublished(true);
 }
 
 async function deleteSelectedProducts() {
@@ -3143,7 +3641,6 @@ async function bulkPush() {
     const idx = _allUnpublishedProducts.findIndex(p => p.id === id);
     if (idx >= 0) _allUnpublishedProducts.splice(idx, 1);
   }
-  document.getElementById('unpub-reason-filter').value = '';
   filterUnpublished();
   _publishedLoaded = false;
 }
@@ -3477,120 +3974,14 @@ function renderCatalogTable() {
 }
 
 // -----------------------------------------------------------------------
-// Size Conversion Mappings
+// Size Conversions tab loader
 // -----------------------------------------------------------------------
-let _sizeMappingsData = {};
-
-const _SIZE_MAPPING_LABELS = {
-  eu_to_sml:               { title: 'EU → S/M/L',              desc: 'EU dress sizes → Regular S/M/L for clothing (size_s_m_l)' },
-  womens_letter_to_numeric: { title: "Women's Letter → Numeric", desc: 'Letter sizes → Regular N (letter) for women\'s clothing' },
-  letter_to_mens_pants:    { title: "Letter → Men's Pants",     desc: 'Letter sizes → waist number for men\'s pants' },
-  eu_mens_pants_to_us:     { title: "EU → Men's Pants US",      desc: 'EU waist → US waist for men\'s pants' },
-  letter_to_waist:         { title: 'Letter → Waist',           desc: 'Letter sizes → waist inches for swim trunks etc.' },
-  eu_bra_band_to_us:       { title: 'EU Bra Band → US',         desc: 'EU band cm → US band inches for bras' },
-  us_chest_to_sml:         { title: 'US Chest → S/M/L',         desc: 'US chest inches → Regular S/M/L for men\'s clothing' },
-  eu_to_us_shoes:          { title: 'EU → US Shoes',            desc: 'EU shoe sizes → US shoe sizes' },
-};
-
 async function loadSizeConversions() {
   hideError('sizes-error');
   try {
-    loadSizeMappings();
     loadBrandConversions();
   } catch(e) {
     showError('sizes-error', e.message);
-  }
-}
-
-async function loadSizeMappings() {
-  try {
-    _sizeMappingsData = await apiFetch('/api/size-mappings');
-    renderSizeMappings();
-  } catch(e) {
-    document.getElementById('size-mappings-container').innerHTML =
-      `<div class="error-banner">${esc(e.message)}</div>`;
-  }
-}
-
-function renderSizeMappings() {
-  const container = document.getElementById('size-mappings-container');
-  const keys = Object.keys(_SIZE_MAPPING_LABELS);
-  container.innerHTML = keys.map(key => {
-    const info = _SIZE_MAPPING_LABELS[key];
-    const entries = _sizeMappingsData[key] || {};
-    const sorted = Object.entries(entries).sort((a, b) => {
-      const na = parseFloat(a[0]), nb = parseFloat(b[0]);
-      if (!isNaN(na) && !isNaN(nb)) return na - nb;
-      return a[0].localeCompare(b[0]);
-    });
-    return `
-      <details class="size-map-card" style="margin-bottom:8px;border:1px solid var(--border);border-radius:6px;padding:0" ${sorted.length ? '' : 'open'}>
-        <summary style="padding:10px 14px;cursor:pointer;font-weight:600;font-size:14px;display:flex;justify-content:space-between;align-items:center">
-          <span>${esc(info.title)}</span>
-          <span style="font-weight:400;font-size:12px;color:var(--text-muted)">${sorted.length} entries</span>
-        </summary>
-        <div style="padding:0 14px 12px">
-          <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">${esc(info.desc)}</p>
-          <table class="data-table" style="font-size:13px">
-            <thead><tr><th style="width:40%">Input</th><th style="width:45%">Mapped To</th><th style="width:15%"></th></tr></thead>
-            <tbody id="smap-${key}">
-              ${sorted.map(([k, v]) => _sizeMapRow(key, k, v)).join('')}
-            </tbody>
-          </table>
-          <button class="btn btn-sm" style="margin-top:6px" onclick="addSizeMapRow('${key}')">+ Add Row</button>
-        </div>
-      </details>`;
-  }).join('');
-}
-
-function _sizeMapRow(tableKey, inputVal, mappedVal) {
-  return `<tr>
-    <td><input type="text" value="${esc(inputVal)}" data-table="${tableKey}" data-orig="${esc(inputVal)}" class="smap-input" style="width:100%;font-size:13px;padding:2px 6px"></td>
-    <td><input type="text" value="${esc(mappedVal)}" data-table="${tableKey}" class="smap-output" style="width:100%;font-size:13px;padding:2px 6px"></td>
-    <td style="text-align:center"><button class="btn btn-sm" style="color:var(--danger);padding:2px 8px" onclick="this.closest('tr').remove()">×</button></td>
-  </tr>`;
-}
-
-function addSizeMapRow(tableKey) {
-  const tbody = document.getElementById('smap-' + tableKey);
-  tbody.insertAdjacentHTML('beforeend', _sizeMapRow(tableKey, '', ''));
-  // Focus the new input
-  const inputs = tbody.querySelectorAll('tr:last-child input');
-  if (inputs.length) inputs[0].focus();
-}
-
-async function saveSizeMappings() {
-  const status = document.getElementById('size-mappings-status');
-  status.textContent = 'Saving…';
-  status.style.color = 'var(--text-muted)';
-
-  // Collect all tables from the DOM
-  const payload = {};
-  for (const key of Object.keys(_SIZE_MAPPING_LABELS)) {
-    const tbody = document.getElementById('smap-' + key);
-    if (!tbody) continue;
-    const map = {};
-    for (const row of tbody.querySelectorAll('tr')) {
-      const inp = row.querySelector('.smap-input');
-      const out = row.querySelector('.smap-output');
-      if (inp && out) {
-        const k = inp.value.trim();
-        const v = out.value.trim();
-        if (k && v) map[k] = v;
-      }
-    }
-    payload[key] = map;
-  }
-
-  try {
-    await apiFetch('/api/size-mappings', { method: 'PUT', body: JSON.stringify(payload) });
-    _sizeMappingsData = payload;
-    status.textContent = 'Saved!';
-    status.style.color = 'var(--success, green)';
-    setTimeout(() => { status.textContent = ''; }, 3000);
-  } catch(e) {
-    status.textContent = 'Error: ' + e.message;
-    status.style.color = 'var(--danger, red)';
   }
 }
 
@@ -3710,6 +4101,439 @@ async function saveBrandConversions() {
     status.textContent = 'Error: ' + e.message;
     status.style.color = 'var(--danger, red)';
   }
+}
+
+// -----------------------------------------------------------------------
+// BF Mapping overrides (D1 bf_mapping table)
+// -----------------------------------------------------------------------
+let _bfMappingsData = [];
+
+async function loadBfMappings() {
+  try {
+    const resp = await apiFetch('/api/bf-mappings');
+    _bfMappingsData = resp.mappings || [];
+    // Populate filter dropdown
+    const filter = document.getElementById('bf-mapping-filter');
+    const prev = filter.value;
+    const fields = [...new Set(_bfMappingsData.map(r => r.field_name))].sort();
+    filter.innerHTML = '<option value="">All fields</option>' +
+      fields.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('');
+    filter.value = prev;
+    renderBfMappings();
+  } catch(e) {
+    document.getElementById('bf-mappings-container').innerHTML =
+      `<div class="error-banner">${esc(e.message)}</div>`;
+  }
+}
+
+function renderBfMappings() {
+  const container = document.getElementById('bf-mappings-container');
+  const filterVal = document.getElementById('bf-mapping-filter').value;
+  const rows = filterVal
+    ? _bfMappingsData.filter(r => r.field_name === filterVal)
+    : _bfMappingsData;
+
+  if (!rows.length) {
+    container.innerHTML = '<p style="color:var(--text-muted);font-size:13px">No mappings found.</p>';
+    return;
+  }
+
+  container.innerHTML = `
+    <table class="data-table">
+      <thead><tr><th>Field Name</th><th>Shopify Value</th><th>Bluefly Value</th><th></th></tr></thead>
+      <tbody id="bf-mappings-tbody">
+        ${rows.map((r, i) => _bfMappingRow(r.field_name, r.sh_value, r.bf_value)).join('')}
+      </tbody>
+    </table>`;
+}
+
+function _bfMappingRow(fn, sh, bf) {
+  return `<tr>
+    <td><input class="bfm-field" value="${esc(fn)}" style="width:100%;padding:3px 6px;border:1px solid var(--border);border-radius:3px;font-size:13px"></td>
+    <td><input class="bfm-sh" value="${esc(sh)}" style="width:100%;padding:3px 6px;border:1px solid var(--border);border-radius:3px;font-size:13px"></td>
+    <td><input class="bfm-bf" value="${esc(bf)}" style="width:100%;padding:3px 6px;border:1px solid var(--border);border-radius:3px;font-size:13px"></td>
+    <td><button class="btn btn-sm" style="color:var(--danger)" onclick="this.closest('tr').remove()">x</button></td>
+  </tr>`;
+}
+
+function addBfMappingRow(fn, sh, bf) {
+  let tbody = document.getElementById('bf-mappings-tbody');
+  if (!tbody) {
+    // Table doesn't exist yet — create it
+    const container = document.getElementById('bf-mappings-container');
+    container.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Field Name</th><th>Shopify Value</th><th>Bluefly Value</th><th></th></tr></thead>
+        <tbody id="bf-mappings-tbody"></tbody>
+      </table>`;
+    tbody = document.getElementById('bf-mappings-tbody');
+  }
+  tbody.insertAdjacentHTML('beforeend', _bfMappingRow(fn || '', sh || '', bf || ''));
+  const inputs = tbody.querySelectorAll('tr:last-child input');
+  if (inputs.length) inputs[fn ? 2 : 0].focus();
+}
+
+async function saveBfMappings() {
+  const status = document.getElementById('bf-mappings-status');
+  status.textContent = 'Saving…';
+  status.style.color = 'var(--text-muted)';
+
+  const tbody = document.getElementById('bf-mappings-tbody');
+  const payload = [];
+  if (tbody) {
+    for (const row of tbody.querySelectorAll('tr')) {
+      const fn = row.querySelector('.bfm-field').value.trim();
+      const sh = row.querySelector('.bfm-sh').value.trim();
+      const bf = row.querySelector('.bfm-bf').value.trim();
+      if (fn && sh && bf) payload.push({field_name: fn, sh_value: sh, bf_value: bf});
+    }
+  }
+
+  try {
+    await apiFetch('/api/bf-mappings', { method: 'PUT', body: JSON.stringify(payload) });
+    _bfMappingsData = payload;
+    status.textContent = `Saved ${payload.length} mapping(s)!`;
+    status.style.color = 'var(--success, green)';
+    setTimeout(() => { status.textContent = ''; }, 3000);
+  } catch(e) {
+    status.textContent = 'Error: ' + e.message;
+    status.style.color = 'var(--danger, red)';
+  }
+}
+
+function quickAddBfMapping(fieldName, shValue) {
+  // Switch to Sizes tab and scroll to BF Mappings section
+  document.querySelector('[data-tab="sizes"]').click();
+  loadBfMappings().then(() => {
+    addBfMappingRow(fieldName, shValue, '');
+    document.getElementById('bf-mappings-container').scrollIntoView({behavior: 'smooth'});
+  });
+}
+
+async function scanMissingSizeMappings() {
+  const allProducts = [...(_allPublishedProducts || []), ...(_allUnpublishedProducts || [])];
+  if (!allProducts.length) { toast('Load products first (Published or Unpublished tab)', 'error'); return; }
+
+  // Group unique sizes by category
+  const catSizes = {};
+  for (const p of allProducts) {
+    const cat = p.bluefly_category;
+    if (!cat) continue;
+    const details = p.variants_detail || [];
+    for (const v of details) {
+      if (!v.title || v.title.toLowerCase() === 'default title') continue;
+      if (!catSizes[cat]) catSizes[cat] = new Set();
+      catSizes[cat].add(v.title);
+    }
+  }
+  const payload = Object.entries(catSizes).map(([category, sizes]) => ({ category, sizes: [...sizes] }));
+  if (!payload.length) { toast('No products with categories and variant sizes found', 'error'); return; }
+
+  const container = document.getElementById('missing-sizes-result');
+  container.style.display = 'block';
+  container.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:13px;">Scanning...</div>';
+
+  try {
+    const res = await fetch('/api/missing-size-mappings', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!data.missing || !data.missing.length) {
+      container.innerHTML = '<div style="padding:12px;color:var(--success);font-size:13px;font-weight:600;">All sizes mapped! No missing mappings found.</div>';
+      return;
+    }
+    const suggestedCount = data.missing.filter(m => m.suggestion).length;
+    container.innerHTML = `
+      <div style="padding:8px 10px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);">
+        <span style="font-size:13px;color:var(--text-muted);">${data.total} missing &middot; ${suggestedCount} auto-suggested</span>
+        <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;" onclick="bulkSaveMissingSizes()">Save All Checked</button>
+        <label style="font-size:12px;color:var(--text-muted);cursor:pointer;"><input type="checkbox" id="miss-toggle-all" onchange="toggleAllMissingSizes(this.checked)" checked> Select all with suggestions</label>
+      </div>
+      <div style="max-height:400px;overflow:auto;">
+      <table style="width:100%;font-size:13px;border-collapse:collapse;">
+        <thead><tr style="background:var(--surface2);position:sticky;top:0;">
+          <th style="padding:6px 6px;width:30px;"></th>
+          <th style="padding:6px 10px;text-align:left;">Shopify Size</th>
+          <th style="padding:6px 10px;text-align:left;">Field</th>
+          <th style="padding:6px 10px;text-align:left;">BF Value (suggested)</th>
+          <th style="padding:6px 10px;text-align:right;">Count</th>
+          <th style="padding:6px 10px;text-align:left;">Categories</th>
+        </tr></thead>
+        <tbody>${data.missing.map((m, i) => `<tr style="border-bottom:1px solid var(--border);" data-miss-idx="${i}">
+          <td style="padding:6px 6px;text-align:center;"><input type="checkbox" class="miss-cb" data-idx="${i}" ${m.suggestion ? 'checked' : ''}></td>
+          <td style="padding:6px 10px;font-weight:600;">${esc(m.sh_value)}</td>
+          <td style="padding:6px 10px;color:var(--text-muted);font-size:12px;">${esc(m.field_name)}</td>
+          <td style="padding:6px 10px;"><input type="text" class="miss-bf-val" data-idx="${i}" value="${esc(m.suggestion || '')}" placeholder="enter bf value" style="width:100%;padding:3px 6px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);${m.suggestion ? 'border-color:var(--success);' : ''}"></td>
+          <td style="padding:6px 10px;text-align:right;">${m.count}</td>
+          <td style="padding:6px 10px;color:var(--text-muted);font-size:11px;">${m.categories.slice(0,3).join(', ')}${m.categories.length > 3 ? '...' : ''}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>`;
+    window._missingSizeData = data.missing;
+    toast(`Found ${data.total} missing, ${suggestedCount} auto-suggested`);
+  } catch (e) {
+    container.innerHTML = `<div style="padding:12px;color:var(--danger);">${esc(e.message)}</div>`;
+  }
+}
+
+function toggleAllMissingSizes(checked) {
+  document.querySelectorAll('.miss-cb').forEach(cb => {
+    const idx = parseInt(cb.dataset.idx);
+    const val = document.querySelector(`.miss-bf-val[data-idx="${idx}"]`);
+    if (checked) { if (val && val.value) cb.checked = true; }
+    else cb.checked = false;
+  });
+}
+
+async function bulkSaveMissingSizes() {
+  const data = window._missingSizeData;
+  if (!data) return;
+  const rows = [];
+  document.querySelectorAll('.miss-cb:checked').forEach(cb => {
+    const idx = parseInt(cb.dataset.idx);
+    const bfVal = document.querySelector(`.miss-bf-val[data-idx="${idx}"]`)?.value?.trim();
+    if (!bfVal) return;
+    const m = data[idx];
+    rows.push({ field_name: m.field_name, sh_value: m.sh_value, bf_value: bfVal });
+  });
+  if (!rows.length) { toast('No rows selected with BF values', 'error'); return; }
+  try {
+    let saved = 0;
+    for (const row of rows) {
+      const res = await fetch('/api/bf-mappings/row', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(row)
+      });
+      if (res.ok) saved++;
+    }
+    toast(`Saved ${saved} of ${rows.length} mappings`);
+    // Re-scan to refresh
+    scanMissingSizeMappings();
+  } catch (e) {
+    toast('Error saving: ' + e.message, 'error');
+  }
+}
+
+function openFixSizeModal(productId) {
+  const data = _sizeErrorData[productId];
+  if (!data) return;
+  const productTitle = data.title;
+  const sizeErrors = data.errors;
+
+  // Find the product object to check for size_field override
+  const product = [..._allPublishedProducts, ..._allUnpublishedProducts].find(p => p.id === Number(productId));
+  const currentSizeField = product?.size_field || '';
+  const sizeFieldOverridden = product?.size_field_overridden || false;
+  const errorField = sizeErrors[0]?.field_name || '';
+  const fieldMismatch = sizeFieldOverridden && currentSizeField && currentSizeField !== errorField;
+
+  // Check if any error already has a brand_converted value (auto-detected from pipeline)
+  const hasPresetConversion = sizeErrors.some(e => e.brand_converted);
+  const presetScale = sizeErrors.find(e => e.size_scale)?.size_scale || '';
+
+  // Build rows with placeholder selects (will be populated after fetch)
+  const rows = sizeErrors.map((e, i) => {
+    const conv = e.brand_converted;
+    const mapKey = conv || e.shopify_size;
+    const convLabel = conv ? `<span style="color:var(--accent);font-weight:500">${esc(conv)}</span>` : '<span class="conv-cell" data-idx="' + i + '" style="color:var(--text-muted)">\u2014</span>';
+    return `<tr>
+      <td style="font-weight:500">${esc(e.shopify_size)}</td>
+      <td class="conv-col" data-idx="${i}">${convLabel}</td>
+      <td style="color:var(--text-muted);font-size:12px">${esc(e.field_name)}</td>
+      <td><select class="fix-size-bf" data-field="${esc(e.field_name)}" data-sh="${esc(mapKey)}" data-orig-sh="${esc(e.shopify_size)}"
+          style="width:100%;padding:6px 10px;font-size:13px;border:1.5px solid var(--border);border-radius:8px">
+          <option value="">Loading...</option>
+      </select></td>
+    </tr>`;
+  }).join('');
+
+  // Build override banner
+  let overrideBanner = '';
+  if (sizeFieldOverridden) {
+    overrideBanner = `
+      <div id="fix-size-override-banner" style="background:#fffbeb;border:1.5px solid #f59e0b;border-radius:10px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <div style="font-size:12px;">
+          <span style="font-weight:600;color:#b45309;">Size field override active:</span>
+          <strong style="color:#92400e;">${esc(currentSizeField)}</strong>
+          ${fieldMismatch ? `<br><span style="color:#dc2626;font-size:11px;">Errors below used <strong>${esc(errorField)}</strong> (from previous push). Re-push to use the override.</span>` : ''}
+        </div>
+        <button class="modal-btn modal-btn-danger" style="font-size:11px;padding:4px 10px;white-space:nowrap;" id="fix-size-remove-override">Remove Override</button>
+      </div>`;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:620px;width:90%">
+      <h4>Fix Size Mappings</h4>
+      <div class="modal-subtitle">${esc(productTitle)} (${productId})</div>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">
+        Select the correct Bluefly value for each Shopify size. Saved as a global rule for all products.
+      </p>
+      ${overrideBanner}
+      <div id="conv-table-picker" style="margin-bottom:12px;display:flex;align-items:center;gap:8px">
+        <label style="font-size:12px;font-weight:600;white-space:nowrap">Conversion table:</label>
+        <select id="conv-table-select" style="flex:1;padding:6px 10px;font-size:13px;border:1.5px solid var(--border);border-radius:8px">
+          <option value="">Loading...</option>
+        </select>
+      </div>
+      <table class="data-table" style="font-size:13px;margin-bottom:16px">
+        <thead><tr><th>Shopify Size</th><th>Converted</th><th>Field</th><th>Bluefly Value</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div id="fix-size-status" style="font-size:13px;margin-bottom:8px"></div>
+      <div class="modal-actions">
+        <button class="modal-btn modal-btn-primary" id="fix-size-save">Save &amp; Re-push</button>
+        <div class="modal-actions-right">
+          <button class="modal-btn modal-btn-cancel" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+  // Remove size field override button
+  const removeOverrideBtn = overlay.querySelector('#fix-size-remove-override');
+  if (removeOverrideBtn) {
+    removeOverrideBtn.addEventListener('click', async () => {
+      removeOverrideBtn.disabled = true;
+      removeOverrideBtn.textContent = 'Removing...';
+      try {
+        const sfo = await apiFetch('/api/size-field-overrides');
+        delete sfo[String(productId)];
+        await apiFetch('/api/size-field-overrides', { method: 'PUT', body: JSON.stringify(sfo) });
+        toast('Size field override removed');
+        overlay.remove();
+        if (typeof loadPublished === 'function') loadPublished();
+      } catch(e) {
+        toast('Error: ' + e.message, 'error');
+        removeOverrideBtn.disabled = false;
+        removeOverrideBtn.textContent = 'Remove Override';
+      }
+    });
+  }
+
+  // Populate brand conversion table dropdown
+  const convSelect = overlay.querySelector('#conv-table-select');
+  apiFetch('/api/brand-size-conversions').then(tables => {
+    const labels = Object.keys(tables || {});
+    let options = '<option value="">(No conversion)</option>';
+    for (const label of labels) {
+      const selected = (presetScale && label === presetScale) ? ' selected' : '';
+      options += `<option value="${esc(label)}"${selected}>${esc(label)}</option>`;
+    }
+    convSelect.innerHTML = options;
+    if (hasPresetConversion) {
+      // Already converted by pipeline — show info and disable
+      convSelect.disabled = true;
+      convSelect.title = 'Auto-detected from product size scale';
+    }
+  }).catch(() => {
+    convSelect.innerHTML = '<option value="">(No conversion)</option>';
+  });
+
+  // On conversion table change, apply conversions to update Converted column and data-sh
+  convSelect.addEventListener('change', async () => {
+    const label = convSelect.value;
+    const convCols = overlay.querySelectorAll('.conv-col');
+    const selects = overlay.querySelectorAll('.fix-size-bf');
+    if (!label) {
+      // Reset to no conversion
+      sizeErrors.forEach((e, i) => {
+        const cell = convCols[i];
+        if (cell) cell.innerHTML = '<span style="color:var(--text-muted)">\u2014</span>';
+        if (selects[i]) selects[i].dataset.sh = e.shopify_size;
+      });
+      return;
+    }
+    try {
+      const sizes = sizeErrors.map(e => e.shopify_size);
+      const resp = await apiFetch('/api/brand-size-conversions/apply', {
+        method: 'POST', body: JSON.stringify({ table_label: label, sizes })
+      });
+      const convMap = resp.conversions || {};
+      sizeErrors.forEach((e, i) => {
+        const converted = convMap[e.shopify_size];
+        const cell = convCols[i];
+        if (converted) {
+          if (cell) cell.innerHTML = `<span style="color:var(--accent);font-weight:500">${esc(converted)}</span>`;
+          if (selects[i]) selects[i].dataset.sh = converted;
+        } else {
+          if (cell) cell.innerHTML = '<span style="color:var(--text-muted)">\u2014</span>';
+          if (selects[i]) selects[i].dataset.sh = e.shopify_size;
+        }
+      });
+    } catch(err) {
+      console.error('Conversion apply failed:', err);
+    }
+  });
+
+  // Fetch allowed values from field catalog and populate dropdowns
+  apiFetch('/api/bluefly/field-catalog').then(resp => {
+    const fields = resp.fields || [];
+    const selects = overlay.querySelectorAll('.fix-size-bf');
+    for (const sel of selects) {
+      const fieldName = sel.dataset.field;
+      const catalogField = fields.find(f => f.field_name === fieldName);
+      const allowed = catalogField ? catalogField.allowed_values : [];
+      const matchError = sizeErrors.find(e => e.field_name === fieldName);
+      sel.innerHTML = '<option value="">-- select --</option>' +
+        allowed.map(v => `<option value="${esc(v)}"${(matchError && matchError.suggestion === v) ? ' selected' : ''}>${esc(v)}</option>`).join('');
+    }
+    const firstSel = overlay.querySelector('.fix-size-bf');
+    if (firstSel) firstSel.focus();
+  }).catch(() => {
+    // Fallback to text inputs if catalog fetch fails
+    const selects = overlay.querySelectorAll('.fix-size-bf');
+    for (const sel of selects) {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.className = 'fix-size-bf';
+      inp.dataset.field = sel.dataset.field;
+      inp.dataset.sh = sel.dataset.sh;
+      inp.dataset.origSh = sel.dataset.origSh;
+      inp.placeholder = 'Bluefly value';
+      inp.style.cssText = 'width:100%;padding:6px 10px;font-size:13px;border:1.5px solid var(--border);border-radius:8px';
+      sel.replaceWith(inp);
+    }
+  });
+
+  document.getElementById('fix-size-save').addEventListener('click', async () => {
+    const status = document.getElementById('fix-size-status');
+    const saveBtn = document.getElementById('fix-size-save');
+    const inputs = overlay.querySelectorAll('.fix-size-bf');
+    const mappings = [];
+    for (const inp of inputs) {
+      const bf = inp.value.trim();
+      if (bf) mappings.push({ field_name: inp.dataset.field, sh_value: inp.dataset.sh, bf_value: bf });
+    }
+    if (!mappings.length) { status.textContent = 'Enter at least one Bluefly value'; status.style.color = 'var(--danger)'; return; }
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+    status.textContent = '';
+
+    try {
+      // Save each mapping to bf_mapping
+      for (const m of mappings) {
+        await apiFetch('/api/bf-mappings/row', { method: 'POST', body: JSON.stringify(m) });
+      }
+      status.textContent = `${mappings.length} mapping(s) saved. Re-pushing product...`;
+      status.style.color = 'var(--success, green)';
+
+      // Re-push the product so new mappings take effect
+      const pushResp = await apiFetch('/api/products/push', { method: 'POST', body: JSON.stringify({ product_id: productId }) });
+      status.textContent = `Done! Product re-pushed successfully.`;
+      setTimeout(() => {
+        overlay.remove();
+        // Refresh published table to clear size errors
+        if (typeof loadPublished === 'function') loadPublished();
+      }, 1200);
+    } catch(e) {
+      status.textContent = 'Error: ' + e.message;
+      status.style.color = 'var(--danger, red)';
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save & Re-push';
+    }
+  });
 }
 
 // -----------------------------------------------------------------------

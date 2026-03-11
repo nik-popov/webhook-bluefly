@@ -450,19 +450,39 @@ def map_variant_to_buyable(
         if size_result["field_name"]:
             if size_result.get("value"):
                 fields.append({"Name": size_result["field_name"], "Value": size_result["value"]})
+            elif sql_fields.get(size_result["field_name"]):
+                # bf_mapping has a manual override for this size field (original Shopify size)
+                fields.append({"Name": size_result["field_name"], "Value": sql_fields[size_result["field_name"]]})
             else:
-                logger.warning(
-                    "Size mapping failed: variant=%s size='%s' → %s",
-                    variant.get("id", "?"), size_value, size_result.get("error", "unknown"),
-                )
-                size_error = {
-                    "variant_id": variant.get("id", ""),
-                    "shopify_size": size_value,
-                    "field_name": size_result["field_name"],
-                    "error": size_result.get("error", "unknown"),
-                }
-                if size_result.get("suggestion"):
-                    size_error["suggestion"] = size_result["suggestion"]
+                # Try bf_mapping with the brand-converted value (e.g., 90C → 36C via brand table)
+                brand_conv_raw = size_result.get("brand_converted_raw")
+                bf_conv_val = None
+                if brand_conv_raw and brand_conv_raw != size_value:
+                    from sql_lookup import BlueflyDBLookup
+                    from d1_client import get_d1_client
+                    conv_fields = BlueflyDBLookup(get_d1_client()).lookup_category_fields(category_id, brand_conv_raw)
+                    bf_conv_val = conv_fields.get(size_result["field_name"])
+
+                if bf_conv_val:
+                    fields.append({"Name": size_result["field_name"], "Value": bf_conv_val})
+                else:
+                    _gender = get_metafield(metafields, "custom", "gender") or "?"
+                    logger.warning(
+                        "G:%s Size mapping failed: variant=%s size='%s' -> %s",
+                        _gender, variant.get("id", "?"), size_value, size_result.get("error", "unknown"),
+                    )
+                    size_error = {
+                        "variant_id": variant.get("id", ""),
+                        "shopify_size": size_value,
+                        "field_name": size_result["field_name"],
+                        "error": size_result.get("error", "unknown"),
+                    }
+                    if size_result.get("brand_converted_raw"):
+                        size_error["brand_converted"] = size_result["brand_converted_raw"]
+                    if size_scale:
+                        size_error["size_scale"] = size_scale
+                    if size_result.get("suggestion"):
+                        size_error["suggestion"] = size_result["suggestion"]
         else:
             # Category has no size field — send nothing
             pass

@@ -312,16 +312,15 @@ def _sync_product_to_bluefly_inner(file_path, record, topic, product_id):
         sql_field_map = {}
         variants = enriched.get("variants", [])
         variant_titles = [v.get("title", "") for v in variants]
-        print(f"[Pipeline] SQL lookup: category={category_id}, "
-              f"{len(variants)} variants, titles={variant_titles}")
         try:
             db = BlueflyDBLookup(get_d1_client())
             vt_list = [v.get("title", "") for v in variants if v.get("title", "")]
             sql_field_map = db.lookup_category_fields_batch(category_id, vt_list)
         except Exception as e:
             print(f"[Pipeline] SQL lookup skipped: {e}")
-        total_fields = sum(len(v) for v in sql_field_map.values())
-        print(f"[Pipeline] SQL done: {len(sql_field_map)} variants mapped, {total_fields} fields")
+        missed = [t for t in vt_list if t not in sql_field_map]
+        if missed:
+            print(f"[Pipeline] bf_mapping miss: cat={category_id} {missed}")
         tx_logger.log({
             "type": "sql_db",
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -342,6 +341,18 @@ def _sync_product_to_bluefly_inner(file_path, record, topic, product_id):
             field_defaults=_field_defaults,
             seller_id=BLUEFLY_SELLER_ID,
         )
+
+        # Block push if any variants have unmappable sizes
+        size_errors = bluefly_payload.pop("_size_errors", None)
+        if size_errors:
+            pipeline.update_stage(job_path, "size_error", {
+                "size_errors": size_errors,
+                "product_id": str(product_id),
+                "source": "webhook",
+            })
+            tx_logger.update_status(file_path, "size_error")
+            print(f"[Pipeline] BLOCKED: {len(size_errors)} size error(s) — fix mappings before push")
+            return
 
         pipeline.update_stage(job_path, "mapped", {
             "seller_sku": bluefly_payload.get("SellerSKU"),
@@ -528,16 +539,15 @@ def _sync_inventory_inner(file_path, record, job_path, product_id, variant_sku, 
     sql_field_map = {}
     variants = enriched.get("variants", [])
     variant_titles = [v.get("title", "") for v in variants]
-    print(f"[Pipeline/inv] SQL lookup: category={category_id}, "
-          f"{len(variants)} variants, titles={variant_titles}")
     try:
         db = BlueflyDBLookup(get_d1_client())
         vt_list = [v.get("title", "") for v in variants if v.get("title", "")]
         sql_field_map = db.lookup_category_fields_batch(category_id, vt_list)
     except Exception as e:
-        print(f"[Pipeline] SQL lookup skipped: {e}")
-    total_fields = sum(len(v) for v in sql_field_map.values())
-    print(f"[Pipeline/inv] SQL done: {len(sql_field_map)} variants mapped, {total_fields} fields")
+        print(f"[Pipeline/inv] SQL lookup skipped: {e}")
+    missed = [t for t in vt_list if t not in sql_field_map]
+    if missed:
+        print(f"[Pipeline/inv] bf_mapping miss: cat={category_id} {missed}")
     tx_logger.log({
         "type": "sql_db",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -562,7 +572,17 @@ def _sync_inventory_inner(file_path, record, job_path, product_id, variant_sku, 
         field_defaults=_field_defaults_inv,
         seller_id=BLUEFLY_SELLER_ID,
     )
-    bluefly_payload.pop("_size_errors", None)
+    # Block push if any variants have unmappable sizes
+    size_errors = bluefly_payload.pop("_size_errors", None)
+    if size_errors:
+        pipeline.update_stage(job_path, "size_error", {
+            "size_errors": size_errors,
+            "product_id": str(product_id),
+            "source": "inventory-webhook",
+        })
+        tx_logger.update_status(file_path, "size_error")
+        print(f"[Pipeline/inv] BLOCKED: {len(size_errors)} size error(s)")
+        return
 
     pipeline.update_stage(job_path, "mapped", {
         "variant_sku": variant_sku,

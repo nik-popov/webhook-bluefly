@@ -20,6 +20,7 @@ _OVERRIDE_TABLES = {
     "vendor": "override_vendor",
     "brand_product_id": "override_brand_product_id",
     "price": "override_price",
+    "gender": "override_gender",
 }
 
 
@@ -58,7 +59,7 @@ class ProductStore:
         for pid, val in data.items():
             serialized = json.dumps(val) if not isinstance(val, str) else val
             statements.append((
-                f"INSERT INTO {table} (product_id, value, updated_at) "
+                f"INSERT OR REPLACE INTO {table} (product_id, value, updated_at) "
                 "VALUES (?, ?, datetime('now'))",
                 [pid, serialized],
             ))

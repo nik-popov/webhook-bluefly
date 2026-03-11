@@ -13,7 +13,13 @@ from d1_client import D1Client
 # Module-level TTL cache for lookups (shared across instances)
 _sql_cache: dict[tuple, tuple[float, dict]] = {}
 _sql_cache_lock = threading.Lock()
-_SQL_CACHE_TTL = 300  # 5 minutes
+_SQL_CACHE_TTL = 60  # 1 minute
+
+
+def clear_sql_cache():
+    """Invalidate the bf_mapping lookup cache (call after mapping changes)."""
+    with _sql_cache_lock:
+        _sql_cache.clear()
 
 
 class BlueflyDBLookup:
@@ -31,19 +37,14 @@ class BlueflyDBLookup:
             Empty dict if no matches found.
         """
         rows = self._d1.execute(
-            """
-            SELECT m.field_name, m.bf_value
-            FROM bf_categories c
-            INNER JOIN bf_mapping m ON c.field_name = m.field_name
-            WHERE c.category_id = ?
-            AND m.sh_value = ?
-            """,
-            [category_id, variant_title],
+            "SELECT field_name, bf_value FROM bf_mapping WHERE sh_value = ?",
+            [variant_title],
         )
         results = {}
         for row in rows:
             results[row["field_name"]] = row["bf_value"]
-        print(f"    [D1] cat={category_id} variant='{variant_title}' -> {len(rows)} rows")
+        if not results:
+            print(f"    [D1] cat={category_id} variant='{variant_title}' -> no match")
         return results
 
     def lookup_category_fields_batch(
@@ -70,14 +71,8 @@ class BlueflyDBLookup:
 
         placeholders = ",".join("?" for _ in variant_titles)
         rows = self._d1.execute(
-            f"""
-            SELECT m.field_name, m.bf_value, m.sh_value
-            FROM bf_categories c
-            INNER JOIN bf_mapping m ON c.field_name = m.field_name
-            WHERE c.category_id = ?
-            AND m.sh_value IN ({placeholders})
-            """,
-            [category_id] + list(variant_titles),
+            f"SELECT field_name, bf_value, sh_value FROM bf_mapping WHERE sh_value IN ({placeholders})",
+            list(variant_titles),
         )
         results = {}
         for row in rows:
@@ -85,7 +80,10 @@ class BlueflyDBLookup:
             if vt not in results:
                 results[vt] = {}
             results[vt][row["field_name"]] = row["bf_value"]
-        print(f"    [D1] cat={category_id} batch={len(variant_titles)} variants -> {len(rows)} rows")
+        matched = set(results.keys())
+        missed = set(variant_titles) - matched
+        if missed:
+            print(f"    [D1] cat={category_id} matched={len(matched)} missed={list(missed)}")
 
         with _sql_cache_lock:
             _sql_cache[cache_key] = (now, results)

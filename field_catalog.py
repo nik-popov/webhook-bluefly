@@ -14,15 +14,6 @@ _TSV_PATH = os.path.join(os.path.dirname(__file__), "data", "bluefly_field_catal
 from d1_client import get_config_store
 
 
-def _load_size_mappings_from_config():
-    """Load size_mappings from config, returning raw dict (string keys)."""
-    try:
-        cfg = get_config_store().load()
-        return cfg.get("size_mappings", {})
-    except Exception:
-        return {}
-
-
 def _parse_numeric_keys(d):
     """Convert string keys to float (or int where possible) for numeric lookup tables."""
     out = {}
@@ -35,44 +26,14 @@ def _parse_numeric_keys(d):
     return out
 
 
-def _parse_int_values(d):
-    """Convert string values to int for tables that need numeric output (waist, bra band)."""
-    out = {}
-    for k, v in d.items():
-        try:
-            out[k] = int(v)
-        except (ValueError, TypeError):
-            out[k] = v
-    return out
-
-
 class BlueflyFieldCatalog:
     """Parse the field catalog TSV and resolve size fields by category ID."""
 
-    def __init__(self, tsv_path: str = _TSV_PATH, size_mappings: dict | None = None):
+    def __init__(self, tsv_path: str = _TSV_PATH):
         self._fields = []  # list of parsed rows
         self._size_fields = []  # subset: only ConditionallyRequired size fields
         self._load(tsv_path)
-        self._load_size_mappings(size_mappings)
-        self._size_scale_overrides = self._load_size_scale_overrides()
         self._brand_conversions = self._load_brand_conversions()
-
-    def _load_size_mappings(self, raw: dict | None = None):
-        """Load size conversion tables from config dict (string keys from JSON)."""
-        if raw is None:
-            raw = _load_size_mappings_from_config()
-        self._womens_letter = raw.get("womens_letter_to_numeric", {})
-        self._eu_to_sml = _parse_numeric_keys(raw.get("eu_to_sml", {}))
-        self._letter_mens_pants = raw.get("letter_to_mens_pants", {})
-        self._eu_mens_pants = _parse_numeric_keys(raw.get("eu_mens_pants_to_us", {}))
-        self._letter_waist = _parse_int_values(raw.get("letter_to_waist", {}))
-        self._eu_bra = _parse_numeric_keys(_parse_int_values(raw.get("eu_bra_band_to_us", {})))
-        self._us_chest_to_sml = _parse_numeric_keys(raw.get("us_chest_to_sml", {}))
-        self._eu_shoes = _parse_numeric_keys(raw.get("eu_to_us_shoes", {}))
-
-    def reload_mappings(self, raw: dict | None = None):
-        """Reload size mappings (e.g. after config change) without full restart."""
-        self._load_size_mappings(raw)
 
     def _load(self, tsv_path: str):
         with open(tsv_path, "r", encoding="utf-8") as f:
@@ -82,15 +43,6 @@ class BlueflyFieldCatalog:
                 # Size fields are ConditionallyRequired and have Target categories
                 if row.get("Importance") == "ConditionallyRequired" and row.get("Target"):
                     self._size_fields.append(row)
-
-    @staticmethod
-    def _load_size_scale_overrides():
-        """Load size_scale_overrides from config (label -> Bluefly field name)."""
-        try:
-            cfg = get_config_store().load()
-            return cfg.get("size_scale_overrides", {})
-        except Exception:
-            return {}
 
     @staticmethod
     def _load_brand_conversions():
@@ -107,15 +59,11 @@ class BlueflyFieldCatalog:
         """
         Infer the Bluefly size field name from an ff_size_scale label.
 
-        Checks config overrides first, then uses keyword matching on the label.
+        Uses keyword matching on the label.
         Returns a field name like 'size_shoes', or 'ONE_SIZE' sentinel, or None.
         """
         if not scale_label:
             return None
-        # Check config overrides first (case-insensitive)
-        for key, field in self._size_scale_overrides.items():
-            if key.lower() == scale_label.lower():
-                return field
         # Keyword matching on the label
         low = scale_label.lower()
         if "one size" in low or low == "one_size":
@@ -221,10 +169,26 @@ class BlueflyFieldCatalog:
         # Pattern D: "7 UK - 8/8.5 US" — UK with dual US sizes, take first
         if not dual_match:
             dual_match = re.match(r'([\d.]+)\s*UK\s*[-/]\s*([\d.]+)/[\d.]+\s*US', raw, re.IGNORECASE)
+        # Pattern E: "42 (16.5)" or "40 (15 3/4)" — EU with parenthetical US/inch equivalent
+        paren_parsed = False
+        if not dual_match:
+            paren_match = re.match(r'^([\d.]+)\s*\((.+?)\)\s*$', raw)
+            if paren_match:
+                eu_it_value = paren_match.group(1)
+                inner = paren_match.group(2).strip()
+                # Handle fraction inside parens: "15 3/4" → "15.75"
+                frac_inner = re.match(r'^(\d+)\s+(\d+)/(\d+)$', inner)
+                if frac_inner:
+                    whole = int(frac_inner.group(1))
+                    numer = int(frac_inner.group(2))
+                    denom = int(frac_inner.group(3))
+                    inner = str(whole + numer / denom) if denom else inner
+                raw = inner
+                paren_parsed = True
         if dual_match:
             eu_it_value = dual_match.group(1)  # EU/IT/UK portion
             raw = dual_match.group(2)          # US portion
-        else:
+        elif not paren_parsed:
             # Strip trailing region suffixes like " EU", " US", " UK"
             raw = re.sub(r'\s+(EU|US|UK)$', '', raw, flags=re.IGNORECASE)
             # Strip leading "EU " or "US " prefix (e.g. "EU 42")
@@ -244,12 +208,18 @@ class BlueflyFieldCatalog:
             return {"field_name": field_name, "value": None,
                     "error": "Empty size value"}
 
-        # 0) Exact match — try original size first (keep IT/UK/EU if valid)
+        # 0) Exact match — try raw (US/inch) first, then eu_it_value fallback
         _has_brand_table = size_scale and size_scale in self._brand_conversions
         _brand_converted = False  # tracks whether brand table actually matched
+        _brand_converted_val = None  # the US value after brand conversion (for bf_mapping fallback)
         for av in allowed:
             if av.lower() == raw.lower():
                 return {"field_name": field_name, "value": av}
+        # Fallback: if dual format parsed, try the EU/IT portion too
+        if eu_it_value:
+            for av in allowed:
+                if av.lower() == eu_it_value.lower():
+                    return {"field_name": field_name, "value": av}
 
         # 1) Brand-specific conversion — convert IT/UK → US only if original didn't match
         if _has_brand_table:
@@ -265,6 +235,7 @@ class BlueflyFieldCatalog:
             if converted:
                 _brand_converted = True
                 us_val = str(converted)
+                _brand_converted_val = us_val
                 src_label = str(lookup_key)
                 # Try exact match of US value against allowed values
                 for av in allowed:
@@ -276,18 +247,6 @@ class BlueflyFieldCatalog:
                     if av == f"{us_val} Medium":
                         return {"field_name": field_name, "value": av,
                                 "brand_converted": f"{src_label} -> {us_val}"}
-                # For size_s_m_l: US chest → SML (e.g., US 38 → "Regular M")
-                if field_name == "size_s_m_l":
-                    try:
-                        chest_num = int(float(us_val))
-                        sml_val = self._us_chest_to_sml.get(chest_num)
-                        if sml_val:
-                            for av in allowed:
-                                if av.lower() == sml_val.lower():
-                                    return {"field_name": field_name, "value": av,
-                                            "brand_converted": f"{src_label} -> {us_val} -> {sml_val}"}
-                    except ValueError:
-                        pass
                 # Converted US value didn't match — fall through to other steps
 
         # 2) Numeric match — Shopify often sends "9" but Bluefly wants "9" or "9.5"
@@ -344,27 +303,12 @@ class BlueflyFieldCatalog:
                 if av.lower() == expanded.lower():
                     return {"field_name": field_name, "value": av}
 
-        # 4b) EU numeric → SML for clothing (size_s_m_l only)
-        #     Skip when a brand table exists — brand table already handled conversion
-        if field_name == "size_s_m_l" and not _brand_converted:
-            try:
-                eu_num = int(float(raw))
-                eu_mapped = self._eu_to_sml.get(eu_num)
-                if eu_mapped:
-                    for av in allowed:
-                        if av.lower() == eu_mapped.lower():
-                            return {"field_name": field_name, "value": av}
-            except ValueError:
-                pass
-            # 4c) Dress shirt sizes "41 (16)" or "40 (15 3/4)" → extract EU cm, map to SML
-            shirt_match = re.match(r'^(\d{2})\s*\(', raw)
-            if shirt_match:
-                eu_num = int(shirt_match.group(1))
-                eu_mapped = self._eu_to_sml.get(eu_num)
-                if eu_mapped:
-                    for av in allowed:
-                        if av.lower() == eu_mapped.lower():
-                            return {"field_name": field_name, "value": av}
+        # 4b) SML parenthetical match — "S" → "Regular 4 (S)" in size_womens_clothing
+        sml_suffix = raw.upper()
+        if sml_suffix in ("XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL"):
+            for av in allowed:
+                if av.startswith("Regular ") and av.endswith(f"({sml_suffix})"):
+                    return {"field_name": field_name, "value": av}
 
         # 5) One Size matching
         if raw.lower() in ("one size", "os", "o/s", "one size fits all", "osfa"):
@@ -382,13 +326,6 @@ class BlueflyFieldCatalog:
                         return {"field_name": field_name, "value": av}
             except ValueError:
                 pass
-            # 6b) Letter size → waist inches (for swim trunks etc.)
-            waist_inches = self._letter_waist.get(raw.lower())
-            if waist_inches:
-                waist_str = f'{waist_inches}" Waist'
-                for av in allowed:
-                    if av == waist_str:
-                        return {"field_name": field_name, "value": av}
 
         # 7) Women's clothing numeric — "6" should match "6" or "Regular 6 (S)"
         if field_name == "size_womens_clothing":
@@ -399,12 +336,6 @@ class BlueflyFieldCatalog:
             for av in allowed:
                 if av.startswith(f"Regular {raw} "):
                     return {"field_name": field_name, "value": av}
-            # 7b) Letter size → standard numeric: "S" → "Regular 4 (S)"
-            wc_mapped = self._womens_letter.get(raw.lower())
-            if wc_mapped:
-                for av in allowed:
-                    if av == wc_mapped:
-                        return {"field_name": field_name, "value": av}
 
         # 8) Suit size — plain number "46" → "46r" (regular fit default)
         if field_name == "size_suits":
@@ -412,66 +343,6 @@ class BlueflyFieldCatalog:
             for av in allowed:
                 if av.lower() == regular:
                     return {"field_name": field_name, "value": av}
-
-        # 9) Men's pants EU → US waist: "48" → "32", "50" → "34"
-        #    Skip when a brand table exists
-        if field_name == "size_mens_pants" and not _brand_converted:
-            try:
-                eu_num = int(float(raw))
-                us_waist = self._eu_mens_pants.get(eu_num)
-                if us_waist:
-                    # Try plain waist first
-                    for av in allowed:
-                        if av == us_waist:
-                            return {"field_name": field_name, "value": av}
-                    # Try waist x inseam (default 32" inseam)
-                    waist_inseam = f"{us_waist} x 32"
-                    for av in allowed:
-                        if av == waist_inseam:
-                            return {"field_name": field_name, "value": av}
-            except ValueError:
-                pass
-            # 9b) Letter sizes for men's pants: "XXL" → "38"
-            pants_mapped = self._letter_mens_pants.get(raw.lower())
-            if pants_mapped:
-                for av in allowed:
-                    if av == pants_mapped:
-                        return {"field_name": field_name, "value": av}
-
-        # 10) Bra EU → US band conversion: "85B" → "38B"
-        #     Skip when a brand table exists
-        if field_name == "size_bras" and not _brand_converted:
-            bra_match = re.match(r'^(\d{2,3})([A-G]+)$', raw, re.IGNORECASE)
-            if bra_match:
-                eu_band = int(bra_match.group(1))
-                cup = bra_match.group(2).upper()
-                us_band = self._eu_bra.get(eu_band)
-                if us_band:
-                    us_bra = f"{us_band}{cup}"
-                    for av in allowed:
-                        if av == us_bra:
-                            return {"field_name": field_name, "value": av}
-                    # Fallback: US band > 40 → XXL
-                    for av in allowed:
-                        if av == "XXL":
-                            return {"field_name": field_name, "value": av}
-
-        # 11) Shoe EU → US conversion: EU 34 → US 2.5
-        #     Skip when a brand table exists
-        if field_name == "size_shoes" and not _brand_converted:
-            try:
-                eu_num = float(raw)
-                us_shoe = self._eu_shoes.get(eu_num)
-                if us_shoe:
-                    for av in allowed:
-                        if av == us_shoe:
-                            return {"field_name": field_name, "value": av}
-                    # Try with "Medium" width suffix
-                    for av in allowed:
-                        if av == f"{us_shoe} Medium":
-                            return {"field_name": field_name, "value": av}
-            except ValueError:
-                pass
 
         # Tiebreaker: if category-based field didn't match, try ff_size_scale hint
         if size_scale:
@@ -500,6 +371,8 @@ class BlueflyFieldCatalog:
             "value": None,
             "error": f"No match for '{raw}' in {field_name} ({len(allowed)} allowed values)",
         }
+        if _brand_converted_val:
+            result["brand_converted_raw"] = _brand_converted_val
         if suggestion:
             result["suggestion"] = suggestion
         return result

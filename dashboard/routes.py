@@ -125,11 +125,27 @@ def handle_500(e):
 # Config helpers
 # -----------------------------------------------------------------------
 
+_DEPRECATED_CONFIG_KEYS = {"size_mappings", "size_scale_overrides"}
+
+
 def load_config() -> dict:
     try:
         cfg = get_config_store().load()
     except Exception:
         cfg = {}
+
+    # Strip deprecated keys and delete rows from D1
+    removed = {k for k in _DEPRECATED_CONFIG_KEYS if k in cfg}
+    if removed:
+        for k in removed:
+            del cfg[k]
+        try:
+            from d1_client import get_d1_client
+            d1 = get_d1_client()
+            for k in removed:
+                d1.execute("DELETE FROM config WHERE key = ?", [k])
+        except Exception:
+            pass
 
     # Merge with defaults so new keys always exist
     merged = {**DEFAULT_CONFIG}
@@ -141,6 +157,9 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict):
+    # Strip deprecated keys before saving
+    for k in _DEPRECATED_CONFIG_KEYS:
+        cfg.pop(k, None)
     get_config_store().save(cfg)
 
 
@@ -703,12 +722,13 @@ def _enrich_products(products, synced_products, cfg, overrides=None):
     sf_overrides = overrides.get("size_field", {})
     title_overrides = overrides.get("title", {})
     vendor_overrides = overrides.get("vendor", {})
+    gender_overrides = overrides.get("gender", {})
     bpid_overrides = overrides.get("brand_product_id", {})
     price_overrides = overrides.get("price", {})
     all_image_overrides = overrides.get("image", {})
 
     for p in products:
-        pid = p["id"]
+        pid = str(p["id"])
         if pid in synced_products:
             p["sync_status"] = synced_products[pid]["status"]
             p["sync_time"] = synced_products[pid].get("time")
@@ -771,6 +791,12 @@ def _enrich_products(products, synced_products, cfg, overrides=None):
             p["vendor"] = v_override
             p["vendor_overridden"] = True
 
+        # Apply gender override
+        g_override = gender_overrides.get(str(pid))
+        if g_override:
+            p["gender"] = g_override
+            p["gender_overridden"] = True
+
         # Apply brand_product_id override
         bpid_override_raw = bpid_overrides.get(str(pid))
         if bpid_override_raw:
@@ -782,6 +808,11 @@ def _enrich_products(products, synced_products, cfg, overrides=None):
 
         # Apply price override
         pr_override = price_overrides.get(str(pid))
+        if pr_override:
+            try:
+                pr_override = json.loads(pr_override) if isinstance(pr_override, str) else pr_override
+            except (json.JSONDecodeError, TypeError):
+                pr_override = None
         if pr_override:
             p["price_overridden"] = True
             p["price_override"] = pr_override
@@ -901,6 +932,168 @@ def api_products_published():
     })
 
 
+@dashboard_bp.route("/api/products/size-diff", methods=["POST"])
+def api_products_size_diff():
+    """Compare pushed products (dashboard) vs portal: which made it, which are hanging.
+
+    Expects POST body: { "products": { "<product_id>": { "title": ..., "sku": ..., "sizes": [...] }, ... } }
+    Frontend sends already-loaded published products. Backend fetches portal and matches by SKU.
+    Also compares per-product size values as secondary info.
+    Streams NDJSON with progress as portal pages are fetched.
+    """
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError, URLError
+
+    body = request.get_json(force=True) or {}
+    dash_products = body.get("products", {})
+
+    cfg = load_config()
+    cookie = cfg.get("portal_cookie", "")
+    if not cookie:
+        return jsonify({"error": "Portal cookie not configured — set it in Settings tab"}), 400
+
+    # Look up SellerSKU from D1 for each product
+    from product_store import get_product_store
+    store = get_product_store()
+
+    dash_by_sku = {}
+    for pid, info in dash_products.items():
+        status_row = store.get_product_status(str(pid))
+        seller_sku = (status_row or {}).get("sku", "")
+        if not seller_sku:
+            continue
+        dash_by_sku[seller_sku] = {
+            "product_id": pid,
+            "title": info.get("title", ""),
+            "sizes": info.get("sizes", []),
+        }
+
+    # Debug: print sample SKUs
+    sample_dash = list(dash_by_sku.keys())[:5]
+    print(f"[SizeDiff] D1 SKU samples: {sample_dash}")
+    print(f"[SizeDiff] Total D1 SKUs: {len(dash_by_sku)}, products without SKU: {len(dash_products) - len(dash_by_sku)}")
+
+    def generate():
+        if not dash_by_sku:
+            yield json.dumps({"type": "complete", "on_portal": [], "hanging": [],
+                              "portal_only": [], "dash_count": 0, "portal_count": 0}) + "\n"
+            return
+
+        yield json.dumps({"type": "progress", "step": "portal",
+                          "message": f"Fetching portal products ({len(dash_by_sku)} pushed to match)...",
+                          "portal_fetched": 0, "dash_total": len(dash_by_sku)}) + "\n"
+
+        portal_base = "https://app.puppetvendors.com"
+        headers = {
+            "Cookie": f"connect.sid={cookie}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        # {sku_body: {sku_full, sizes, buyable_count}}
+        portal_by_sku = {}
+        offset = 0
+        limit = 50
+        portal_product_count = 0
+        while True:
+            url = f"{portal_base}/api/portal/v2/products?status=all&limit={limit}&offset={offset}"
+            req = Request(url, headers=headers)
+            try:
+                resp = urlopen(req, timeout=30)
+                data = json.loads(resp.read().decode())
+                products = data.get("products", data.get("data", []))
+                if not isinstance(products, list) or not products:
+                    break
+                for p in products:
+                    sku = p.get("SellerSKU", "")
+                    if not sku:
+                        continue
+                    sku_body = sku.partition("_")[2] if "_" in sku else sku
+                    sizes = set()
+                    for b in p.get("BuyableProducts", []):
+                        if not isinstance(b, dict):
+                            continue
+                        for f in b.get("Fields", []):
+                            if isinstance(f, dict) and f.get("Name", "").startswith("size_"):
+                                val = f.get("Value", "")
+                                if val:
+                                    sizes.add(val)
+                    portal_by_sku[sku_body] = {
+                        "sku_full": sku,
+                        "sizes": sorted(sizes),
+                        "buyable_count": len(p.get("BuyableProducts", [])),
+                    }
+                portal_product_count += len(products)
+                if portal_product_count <= 50:
+                    sample_portal = list(portal_by_sku.keys())[:5]
+                    print(f"[SizeDiff] Portal SKU (body) samples: {sample_portal}")
+                    # Also print raw SKUs
+                    raw_skus = [p.get("SellerSKU", "") for p in products[:5]]
+                    print(f"[SizeDiff] Portal SKU (raw) samples: {raw_skus}")
+                yield json.dumps({"type": "progress", "step": "portal",
+                                  "message": f"Fetched {portal_product_count} portal products...",
+                                  "portal_fetched": portal_product_count}) + "\n"
+                if len(products) < limit:
+                    break
+                offset += limit
+            except (HTTPError, URLError, Exception) as e:
+                yield json.dumps({"type": "error", "error": f"Portal fetch failed: {str(e)}"}) + "\n"
+                return
+
+        yield json.dumps({"type": "progress", "step": "comparing",
+                          "message": f"Matching {len(dash_by_sku)} dashboard vs {portal_product_count} portal products..."}) + "\n"
+
+        on_portal = []
+        hanging = []
+        matched_portal_skus = set()
+
+        for sku, dash_info in dash_by_sku.items():
+            portal_info = portal_by_sku.get(sku)
+            if portal_info:
+                matched_portal_skus.add(sku)
+                dash_sizes = set(dash_info["sizes"])
+                portal_sizes = set(portal_info["sizes"])
+                missing_sizes = sorted(dash_sizes - portal_sizes)
+                extra_sizes = sorted(portal_sizes - dash_sizes)
+                on_portal.append({
+                    "product_id": dash_info["product_id"],
+                    "title": dash_info["title"],
+                    "seller_sku": sku,
+                    "dash_sizes": sorted(dash_sizes),
+                    "portal_sizes": portal_info["sizes"],
+                    "missing_sizes": missing_sizes,
+                    "extra_sizes": extra_sizes,
+                    "portal_variants": portal_info["buyable_count"],
+                })
+            else:
+                hanging.append({
+                    "product_id": dash_info["product_id"],
+                    "title": dash_info["title"],
+                    "seller_sku": sku,
+                    "dash_sizes": dash_info["sizes"],
+                })
+
+        # Portal products not matched to any dashboard product
+        portal_only = []
+        for sku, pinfo in portal_by_sku.items():
+            if sku not in matched_portal_skus and sku not in dash_by_sku:
+                portal_only.append({
+                    "seller_sku": pinfo["sku_full"],
+                    "portal_sizes": pinfo["sizes"],
+                    "portal_variants": pinfo["buyable_count"],
+                })
+
+        yield json.dumps({
+            "type": "complete",
+            "on_portal": on_portal,
+            "hanging": hanging,
+            "portal_only": portal_only,
+            "dash_count": len(dash_by_sku),
+            "portal_count": portal_product_count,
+        }) + "\n"
+
+    return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
+
+
 @dashboard_bp.route("/api/products/unpublished")
 def api_products_unpublished():
     """Stream unpublished products as NDJSON, one batch per Shopify page."""
@@ -1012,6 +1205,10 @@ def api_push_product():
         if vendor_override:
             enriched["vendor"] = vendor_override
 
+        gender_override = _ovr["gender"]
+        if gender_override:
+            _patch_metafield(metafields, "custom", "gender", gender_override)
+
         bpid_override_raw = _ovr["brand_product_id"]
         if bpid_override_raw:
             _variants = enriched.get("variants", [])
@@ -1055,20 +1252,23 @@ def api_push_product():
             if img_url and not _has_valid_image_format(img_url):
                 return jsonify({"error": f"Image format not supported (must be jpg, png, or gif): {img_url}"}), 400
 
-        # SQL lookup (graceful fallback)
+        # SQL lookup (graceful fallback) — skip if category has no size field
         sql_field_map = {}
         variants = enriched.get("variants", [])
         variant_titles = [v.get("title", "") for v in variants]
-        print(f"[Dashboard] SQL lookup: category={category_id}, "
-              f"{len(variants)} variants, titles={variant_titles}")
-        try:
-            db = _get_db()
-            vt_list = [v.get("title", "") for v in variants if v.get("title", "")]
-            sql_field_map = db.lookup_category_fields_batch(category_id, vt_list)
-        except Exception as e:
-            print(f"[Dashboard] SQL lookup skipped: {e}")
-        total_fields = sum(len(v) for v in sql_field_map.values())
-        print(f"[Dashboard] SQL done: {len(sql_field_map)} variants mapped, {total_fields} fields")
+        _gender = get_metafield(metafields, "custom", "gender") or "?"
+        from field_catalog import get_catalog as _get_catalog
+        _has_size_field = _get_catalog().get_size_field_for_category(category_id) is not None
+        if _has_size_field:
+            try:
+                db = _get_db()
+                vt_list = [v.get("title", "") for v in variants if v.get("title", "")]
+                sql_field_map = db.lookup_category_fields_batch(category_id, vt_list)
+            except Exception as e:
+                print(f"[Dashboard] SQL lookup skipped: {e}")
+            missed = [t for t in vt_list if t not in sql_field_map]
+            if missed:
+                print(f"[Dashboard] G:{_gender} cat={category_id} bf_mapping miss: {missed} (have: {list(sql_field_map.keys())})")
 
         # Build payload with price adjustment and field defaults
         cfg = load_config()
@@ -1219,6 +1419,7 @@ def api_push_bulk():
         sf_overrides = _all_overrides.get("size_field", {})
         title_overrides = _all_overrides.get("title", {})
         vendor_overrides = _all_overrides.get("vendor", {})
+        gender_overrides_bulk = _all_overrides.get("gender", {})
         price_overrides = _all_overrides.get("price", {})
         success_count = 0
         error_count = 0
@@ -1244,13 +1445,16 @@ def api_push_bulk():
                 if sf_override:
                     _patch_metafield(metafields, "custom", "size_field_override", sf_override)
 
-                # Apply title/vendor overrides
+                # Apply title/vendor/gender overrides
                 t_ov = title_overrides.get(str(pid))
                 if t_ov:
                     enriched["title"] = t_ov
                 v_ov = vendor_overrides.get(str(pid))
                 if v_ov:
                     enriched["vendor"] = v_ov
+                g_ov = gender_overrides_bulk.get(str(pid))
+                if g_ov:
+                    _patch_metafield(metafields, "custom", "gender", g_ov)
 
                 # Apply brand_product_id override
                 bpid_ov_raw = bpid_overrides.get(str(pid))
@@ -1331,8 +1535,13 @@ def api_push_bulk():
                 if size_errors:
                     pipeline.update_stage(job_path, "size_error", {
                         "size_errors": size_errors,
+                        "product_id": str(pid),
                         "source": "dashboard-bulk",
                     })
+                    from product_store import get_product_store
+                    get_product_store().upsert_product_status(
+                        str(pid), "size_error", size_errors=size_errors,
+                    )
                     error_count += 1
                     yield json.dumps({
                         "type": "size_error",
@@ -1462,6 +1671,9 @@ def api_retry_errors():
             v_ov = _ovr["vendor"]
             if v_ov:
                 enriched["vendor"] = v_ov
+            g_ov = _ovr["gender"]
+            if g_ov:
+                _patch_metafield(metafields, "custom", "gender", g_ov)
             bpid_ov_raw = _ovr["brand_product_id"]
             if bpid_ov_raw:
                 _variants = enriched.get("variants", [])
@@ -1943,7 +2155,7 @@ def api_sync_qty_price():
             field_defaults=field_defaults,
             seller_id=bluefly.seller_id,
         )
-        bluefly_payload.pop("_size_errors", None)
+        size_errors = bluefly_payload.pop("_size_errors", None)
 
         job_path = pipeline.create_job(
             source_file="dashboard-sync-qty",
@@ -1951,6 +2163,17 @@ def api_sync_qty_price():
             product_id=product_id,
             event_id=f"sync-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
         )
+
+        if size_errors:
+            pipeline.update_stage(job_path, "size_error", {
+                "size_errors": size_errors,
+                "product_id": str(product_id),
+                "source": "dashboard-sync",
+            })
+            return jsonify({
+                "error": "Size mapping errors — fix before syncing",
+                "size_errors": size_errors,
+            }), 422
 
         # Log what we're sending so we can diagnose quantity issues
         bp_summary = [
@@ -2084,35 +2307,6 @@ def api_field_catalog():
 
 
 # -----------------------------------------------------------------------
-# Size Conversion Mappings — editable EU/international → US tables
-# -----------------------------------------------------------------------
-
-@dashboard_bp.route("/api/size-mappings")
-def api_size_mappings_get():
-    """Return all size conversion mapping tables from config."""
-    cfg = load_config()
-    return jsonify(cfg.get("size_mappings", {}))
-
-
-@dashboard_bp.route("/api/size-mappings", methods=["PUT"])
-def api_size_mappings_put():
-    """Save updated size conversion mappings to config and reload catalog."""
-    data = request.get_json(force=True)
-    if not isinstance(data, dict):
-        return jsonify({"error": "Expected a JSON object"}), 400
-
-    cfg = load_config()
-    cfg["size_mappings"] = data
-    save_config(cfg)
-
-    # Reload the singleton catalog so new mappings take effect immediately
-    from field_catalog import get_catalog
-    get_catalog().reload_mappings(data)
-
-    return jsonify({"ok": True})
-
-
-# -----------------------------------------------------------------------
 # Brand Size Conversions API — per-brand IT/UK/EU → US tables
 # -----------------------------------------------------------------------
 
@@ -2138,6 +2332,255 @@ def api_brand_conversions_put():
     get_catalog()._brand_conversions = get_catalog()._load_brand_conversions()
 
     return jsonify({"ok": True})
+
+
+@dashboard_bp.route("/api/brand-size-conversions/apply", methods=["POST"])
+def api_brand_conversions_apply():
+    """Apply a brand conversion table to a list of Shopify sizes.
+
+    Body: {"table_label": "...", "sizes": ["48", "50"]}
+    Returns: {"conversions": {"48": "38", "50": "40"}}
+    """
+    data = request.get_json(force=True)
+    label = (data.get("table_label") or "").strip()
+    sizes = data.get("sizes", [])
+    if not label or not sizes:
+        return jsonify({"error": "table_label and sizes are required"}), 400
+
+    from field_catalog import get_catalog
+    brand_tables = get_catalog()._brand_conversions
+    table = brand_tables.get(label)
+    if table is None:
+        return jsonify({"error": f"No conversion table found for '{label}'"}), 404
+
+    conversions = {}
+    for sz in sizes:
+        # Try exact string match first, then numeric
+        val = table.get(sz)
+        if val is None:
+            try:
+                n = float(sz)
+                n = int(n) if n == int(n) else n
+                val = table.get(n)
+            except (ValueError, TypeError):
+                pass
+        if val is not None:
+            conversions[sz] = str(val)
+    return jsonify({"conversions": conversions})
+
+
+# -----------------------------------------------------------------------
+# BF Mapping API — manual Shopify→Bluefly value overrides (D1 table)
+# -----------------------------------------------------------------------
+
+@dashboard_bp.route("/api/bf-mappings")
+def api_bf_mappings_get():
+    """Return all bf_mapping rows, optionally filtered by ?field_name=X."""
+    from d1_client import get_d1_client
+    d1 = get_d1_client()
+    field_name = request.args.get("field_name", "").strip()
+    if field_name:
+        rows = d1.execute(
+            "SELECT field_name, sh_value, bf_value FROM bf_mapping WHERE field_name = ? ORDER BY sh_value",
+            [field_name],
+        )
+    else:
+        rows = d1.execute("SELECT field_name, sh_value, bf_value FROM bf_mapping ORDER BY field_name, sh_value")
+    return jsonify({"mappings": rows})
+
+
+@dashboard_bp.route("/api/bf-mappings", methods=["PUT"])
+def api_bf_mappings_put():
+    """Save bf_mapping entries. Replaces rows for each field_name present in the payload."""
+    data = request.get_json(force=True)
+    if not isinstance(data, list):
+        return jsonify({"error": "Expected a JSON array"}), 400
+
+    from d1_client import get_d1_client
+    d1 = get_d1_client()
+
+    # Group by field_name so we only delete/replace affected groups
+    groups: dict[str, list] = {}
+    for item in data:
+        fn = (item.get("field_name") or "").strip()
+        sh = (item.get("sh_value") or "").strip()
+        bf = (item.get("bf_value") or "").strip()
+        if fn and sh and bf:
+            groups.setdefault(fn, []).append((fn, sh, bf))
+
+    for fn, rows in groups.items():
+        d1.execute("DELETE FROM bf_mapping WHERE field_name = ?", [fn])
+        for fn_, sh, bf in rows:
+            d1.execute(
+                "INSERT INTO bf_mapping (field_name, sh_value, bf_value) VALUES (?, ?, ?)",
+                [fn_, sh, bf],
+            )
+
+    from sql_lookup import clear_sql_cache
+    clear_sql_cache()
+    return jsonify({"ok": True, "saved": sum(len(r) for r in groups.values())})
+
+
+@dashboard_bp.route("/api/bf-mappings/row", methods=["POST"])
+def api_bf_mappings_add_row():
+    """Add or update a single bf_mapping row (quick-add from size error)."""
+    data = request.get_json(force=True)
+    fn = (data.get("field_name") or "").strip()
+    sh = (data.get("sh_value") or "").strip()
+    bf = (data.get("bf_value") or "").strip()
+    if not fn or not sh or not bf:
+        return jsonify({"error": "field_name, sh_value, and bf_value are required"}), 400
+
+    from d1_client import get_d1_client
+    d1 = get_d1_client()
+    d1.execute(
+        "INSERT OR REPLACE INTO bf_mapping (field_name, sh_value, bf_value) VALUES (?, ?, ?)",
+        [fn, sh, bf],
+    )
+    from sql_lookup import clear_sql_cache
+    clear_sql_cache()
+    return jsonify({"ok": True})
+
+
+def _suggest_bf_value(catalog, field_name, sh_value):
+    """Try relaxed matching to suggest a bf_value for a missing size."""
+    import re as _re
+    raw = sh_value.strip()
+    sf = catalog.get_size_field_by_name(field_name)
+    if not sf:
+        return None
+    allowed = sf["allowed_values"]
+
+    # 1. Strip EU/US suffix and retry
+    stripped = _re.sub(r'\s*(EU|US)\s*$', '', raw, flags=_re.I).strip()
+    if stripped != raw:
+        for av in allowed:
+            if av.lower() == stripped.lower():
+                return av
+
+    # 2. Parse dual format "NN EU / NN US" → use US part
+    dual = _re.match(r'[\d.]+\s*EU\s*/\s*([\d.]+)\s*US', raw, _re.I)
+    if not dual:
+        dual = _re.match(r'EU\s*[\d.]+\s*/\s*US\s*([\d.]+)', raw, _re.I)
+    if dual:
+        us_val = dual.group(1)
+        for av in allowed:
+            if av == us_val:
+                return av
+        # Try suits: "50" → "50r"
+        if field_name == "size_suits":
+            candidate = us_val.lower() + "r"
+            for av in allowed:
+                if av.lower() == candidate:
+                    return av
+
+    # 3. SML expansion for any field
+    sml = {"xxs": "Regular XXS", "xs": "Regular XS", "s": "Regular S",
+           "m": "Regular M", "l": "Regular L", "xl": "Regular XL",
+           "xxl": "Regular XXL", "xxxl": "Regular XXXL",
+           "small": "Regular S", "medium": "Regular M", "large": "Regular L"}
+    expanded = sml.get(raw.lower())
+    if expanded:
+        for av in allowed:
+            if av.lower() == expanded.lower():
+                return av
+
+    # 3b. SML parenthetical — "S" → "Regular 4 (S)" for womens clothing
+    sml_suffix = raw.upper()
+    if sml_suffix in ("XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL"):
+        for av in allowed:
+            if av.startswith("Regular ") and av.endswith(f"({sml_suffix})"):
+                return av
+
+    # 4. Suits: plain number → "Nr"
+    if field_name == "size_suits":
+        candidate = stripped.lower() + "r"
+        for av in allowed:
+            if av.lower() == candidate:
+                return av
+
+    # 5. Numeric match on stripped value
+    try:
+        num = float(stripped)
+        num_s = str(int(num)) if num == int(num) else str(num)
+        for av in allowed:
+            if av == num_s:
+                return av
+    except ValueError:
+        pass
+
+    # 6. Waist size — "30" → '30" Waist'
+    if field_name == "size_waist":
+        try:
+            waist_num = int(float(stripped))
+            waist_str = f'{waist_num}" Waist'
+            for av in allowed:
+                if av == waist_str:
+                    return av
+        except ValueError:
+            pass
+
+    return None
+
+
+@dashboard_bp.route("/api/missing-size-mappings", methods=["POST"])
+def api_missing_size_mappings():
+    """Check which size values would fail mapping.
+
+    Accepts JSON body: [{category, sizes: [str]}]
+    Returns missing entries grouped by (field_name, sh_value) with auto-suggestions.
+    """
+    from field_catalog import get_catalog
+    from sql_lookup import BlueflyDBLookup, clear_sql_cache
+    from d1_client import get_d1_client
+
+    clear_sql_cache()
+    catalog = get_catalog()
+    db = BlueflyDBLookup(get_d1_client())
+
+    items = request.get_json(force=True)
+    if not isinstance(items, list):
+        return jsonify({"error": "Expected JSON array"}), 400
+
+    missing = {}  # (field_name, sh_value) -> {count, categories}
+    for item in items:
+        cat = item.get("category", "")
+        sizes = item.get("sizes", [])
+        if not cat or not sizes:
+            continue
+
+        sf = catalog.get_size_field_for_category(cat)
+        if not sf:
+            continue
+        field_name = sf["field_name"]
+
+        # Check bf_mapping
+        bf_map = db.lookup_category_fields_batch(cat, sizes)
+
+        for size in sizes:
+            # Check catalog first
+            result = catalog.resolve_size(cat, size)
+            if result.get("value"):
+                continue
+
+            # Check bf_mapping
+            variant_fields = bf_map.get(size, {})
+            if variant_fields.get(field_name):
+                continue
+
+            key = (field_name, size)
+            if key not in missing:
+                missing[key] = {"sh_value": size, "field_name": field_name, "categories": [], "count": 0}
+            missing[key]["count"] += 1
+            if cat not in missing[key]["categories"]:
+                missing[key]["categories"].append(cat)
+
+    # Add auto-suggestions
+    for entry in missing.values():
+        entry["suggestion"] = _suggest_bf_value(catalog, entry["field_name"], entry["sh_value"])
+
+    result = sorted(missing.values(), key=lambda x: (-x["count"], x["field_name"], x["sh_value"]))
+    return jsonify({"missing": result, "total": len(result)})
 
 
 # -----------------------------------------------------------------------
@@ -2194,6 +2637,23 @@ def api_vendor_favorites_put():
         return jsonify({"error": "Expected a JSON array"}), 400
     cfg = load_config()
     cfg["vendor_favorites"] = data
+    save_config(cfg)
+    return jsonify({"ok": True})
+
+
+@dashboard_bp.route("/api/category-favorites")
+def api_category_favorites_get():
+    cfg = load_config()
+    return jsonify(cfg.get("category_favorites", []))
+
+
+@dashboard_bp.route("/api/category-favorites", methods=["PUT"])
+def api_category_favorites_put():
+    data = request.get_json(force=True)
+    if not isinstance(data, list):
+        return jsonify({"error": "Expected a JSON array"}), 400
+    cfg = load_config()
+    cfg["category_favorites"] = data
     save_config(cfg)
     return jsonify({"ok": True})
 
@@ -2283,6 +2743,26 @@ def api_vendor_overrides_put():
         return jsonify({"error": "Expected a JSON object"}), 400
     from product_store import get_product_store
     get_product_store().set_all_overrides("vendor", data)
+    return jsonify({"ok": True})
+
+
+# -----------------------------------------------------------------------
+# Gender Overrides API — per-product gender override
+# -----------------------------------------------------------------------
+
+@dashboard_bp.route("/api/gender-overrides")
+def api_gender_overrides_get():
+    from product_store import get_product_store
+    return jsonify(get_product_store().get_all_overrides("gender"))
+
+
+@dashboard_bp.route("/api/gender-overrides", methods=["PUT"])
+def api_gender_overrides_put():
+    data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected a JSON object"}), 400
+    from product_store import get_product_store
+    get_product_store().set_all_overrides("gender", data)
     return jsonify({"ok": True})
 
 

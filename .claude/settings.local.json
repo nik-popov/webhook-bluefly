@@ -25,7 +25,8 @@
       "Bash(python3 -c \":*)",
       "Bash(grep -l \"config\" *.py)",
       "Bash(python3 -c \"import json; d=json.load\\(open\\(''c:/Users/icon/shopify-api-bfy/config.json''\\)\\); print\\(''Top-level keys:'', list\\(d.keys\\(\\)\\)\\); print\\(\\); [print\\(f''{k}: {type\\(d[k]\\).__name__}, size={len\\(json.dumps\\(d[k]\\)\\)} bytes''\\) for k in d.keys\\(\\)]\")",
-      "Bash(python migrate_overrides_to_d1.py)"
+      "Bash(python migrate_overrides_to_d1.py)",
+      "Bash(node -e \":*)"
     ]
   }
 }
