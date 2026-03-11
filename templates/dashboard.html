@@ -4005,9 +4005,8 @@ function selectEditorImage(index) {
   actions += `<button class="btn btn-outline btn-sm" onclick="showConvertMenu(${index})">Convert</button>`;
   actions += `<button class="btn btn-outline btn-sm" onclick="enterEditMode(${index})">Edit</button>`;
   actions += `<button class="btn btn-outline btn-sm" onclick="showGenerateUI()">Generate</button>`;
-  actions += `<button class="btn btn-outline btn-sm" onclick="showAddImageUI()">Add URL</button>`;
-  // Delete (only for override/extra images, and only if more than 1 image)
-  if (img.has_override && _imgEdImages.length > 1) {
+  // Delete (any image, as long as more than 1 remains)
+  if (_imgEdImages.length > 1) {
     actions += `<button class="btn btn-outline btn-sm" style="color:#ef4444;border-color:#ef4444;" onclick="deleteImage(${index})">Delete</button>`;
   }
   document.getElementById('img-action-bar').innerHTML = actions;
@@ -4240,7 +4239,7 @@ function showGenerateUI() {
         <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Color-correct and sharpen for e-commerce" onclick="genShortcut('Enhance this product photo for e-commerce: correct white balance, boost contrast and clarity, sharpen product details, clean up any noise or artifacts, even out lighting across the product, make colors vibrant but true-to-life. Keep the composition and background unchanged. Professional color-graded look.')">Enhance</button>
         <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Luxury editorial — product on a model in studio" onclick="genShortcut('Modern luxury product photography: show this product being worn or held by a model in a professional studio. Clean grey or white backdrop, soft diffused lighting, shallow depth of field. Editorial fashion style — minimal styling, neutral tones, the product is the hero. High-end campaign look, shot on medium format.')">Lifestyle</button>
         <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Transform phone photo into pro product shot" onclick="genShortcut('Transform this into a professional e-commerce product shot: clean white seamless studio background, soft even lighting with no harsh shadows, remove any reflections or artifacts from phone camera, crisp product details with natural color accuracy, subtle shadow beneath for grounding. Commercial catalog photography quality.')">Pro Shot</button>
-        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Generate a new angle of the product" onclick="genShortcut('Generate a new angle of this product: show it from a different perspective (three-quarter, side profile, slight overhead, or back view). Maintain the same product identity, colors, and details. Clean white studio background, professional product photography lighting, sharp detail throughout. The angle should reveal features not visible in the original shot.')">Angles</button>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Generate a new angle of the product" onclick="genAngles()">Angles</button>
         <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Invisible mannequin / ghost effect for clothing" onclick="genShortcut('Remove the model or mannequin and show the garment as if worn by an invisible form. Maintain the 3D shape and structure of the clothing with natural draping and volume. Clean white background, professional studio lighting, subtle shadows for depth. The garment should appear to float with realistic form as if on an invisible body. Crisp detail on fabric texture, stitching, and construction.')">Ghost</button>
         <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Overhead flat lay on white surface" onclick="genShortcut('Photograph this product as a flat lay from directly overhead on a clean white surface. Neatly arranged, perfectly symmetrical, styled with minimal props if appropriate. Soft even lighting with no harsh shadows, gentle natural shadow beneath the product. Crisp sharp detail throughout, e-commerce catalog quality. Birds-eye view, professional product photography.')">Flatlay</button>
         <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 8px;" title="Replace the model with a different one" onclick="genShortcut('Replace the model in this image with a different person while keeping everything else identical. Keep the exact same clothing, pose, styling, background, and lighting. The new model should be a professional fashion model with a natural, editorial look. Maintain the same camera angle, framing, and composition. The clothing fit and draping should look realistic on the new model. High-end fashion photography quality.')">New Model</button>
@@ -4257,9 +4256,17 @@ function showGenerateUI() {
   });
 }
 
-function genShortcut(prompt) {
+function genShortcut(prompt, opts) {
   document.getElementById('gen-prompt').value = prompt;
-  submitGenerate();
+  submitGenerate(opts);
+}
+
+function genAngles() {
+  const prompt = 'Generate a new angle of this product: show it from a different perspective (three-quarter, side profile, slight overhead, or back view). Maintain the same product identity, colors, and details. Clean white studio background, professional product photography lighting, sharp detail throughout. The angle should reveal features not visible in the original shot.';
+  document.getElementById('gen-prompt').value = prompt;
+  // Collect all product images as reference context
+  const allUrls = _imgEdImages.map(img => img.effective_url).filter(Boolean);
+  submitGenerate({refImages: allUrls});
 }
 
 async function submitGenerate(opts) {
@@ -4271,12 +4278,16 @@ async function submitGenerate(opts) {
   const bar = document.getElementById('img-action-bar');
   bar.innerHTML = '<span class="spinner"></span> <span style="font-size:13px;color:var(--text-muted);">Generating image...</span>';
 
+  const refImages = opts?.refImages;
   const refImageUrl = opts?.refImage ?? (_imgEdImages[_imgEdSelected]?.effective_url || '');
+  const body = refImages
+    ? {prompt, image_urls: refImages}
+    : {prompt, image_url: refImageUrl};
   try {
     const resp = await fetch(`/api/products/${_imgEdProductId}/images/generate`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({prompt, image_url: refImageUrl})
+      body: JSON.stringify(body)
     });
     // Response is streamed (spaces as keepalive, then JSON at end)
     const text = (await resp.text()).trim();

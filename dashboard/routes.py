@@ -299,10 +299,10 @@ def api_image_override(product_id):
 
 @dashboard_bp.route("/api/products/<int:product_id>/images/override", methods=["DELETE"])
 def api_image_override_delete(product_id):
-    """Remove an image URL override for a product image.
+    """Delete an image at a given index.
 
-    For extra images (index >= Shopify image count), re-indexes higher overrides
-    to fill the gap so image positions stay contiguous.
+    Builds the full effective image list, removes the target index,
+    and saves all remaining positions as overrides so the deletion persists.
     """
     data = request.get_json(force=True)
     image_index = data.get("image_index")
@@ -315,27 +315,46 @@ def api_image_override_delete(product_id):
     from product_store import get_product_store
     store = get_product_store()
 
-    # Get Shopify image count to know if this is an extra image
+    # Build the full effective image list (Shopify + overrides)
     clients = _get_clients()
     shopify = clients["shopify"]
-    shopify_count = 0
+    shopify_images = []
     if shopify:
         try:
             product = shopify.get_product_full(product_id)
-            shopify_count = len(product.get("images", [])) if product else 0
+            shopify_images = product.get("images", []) if product else []
         except Exception:
             pass
 
-    store.delete_image_override(pid, idx)
+    overrides = store.get_image_overrides(pid)
 
-    # Re-index: shift higher overrides down by 1 to fill the gap
-    if idx >= shopify_count:
-        overrides = store.get_image_overrides(pid)
-        for old_idx_str in sorted(overrides.keys(), key=int):
-            old_idx = int(old_idx_str)
-            if old_idx > idx:
-                store.set_image_override(pid, old_idx - 1, overrides[old_idx_str])
-                store.delete_image_override(pid, old_idx)
+    # Build effective URL list
+    effective = []
+    shopify_count = len(shopify_images)
+    for i in range(shopify_count):
+        url = overrides.get(str(i)) or (
+            shopify_images[i].get("url", "") if isinstance(shopify_images[i], dict)
+            else str(shopify_images[i])
+        )
+        effective.append(url)
+    # Add extra override-only images
+    for idx_str in sorted(overrides.keys(), key=int):
+        if int(idx_str) >= shopify_count:
+            effective.append(overrides[idx_str])
+
+    if idx < 0 or idx >= len(effective):
+        return jsonify({"error": "Invalid image index"}), 400
+
+    # Remove the image at idx
+    effective.pop(idx)
+
+    # Clear all existing overrides
+    for key in list(overrides.keys()):
+        store.delete_image_override(pid, int(key))
+
+    # Save all remaining positions as overrides
+    for i, url in enumerate(effective):
+        store.set_image_override(pid, i, url)
 
     return jsonify({"ok": True})
 
@@ -529,6 +548,7 @@ def api_generate_image(product_id):
     data = request.get_json(force=True)
     prompt = (data.get("prompt") or "").strip()
     image_url = (data.get("image_url") or "").strip()
+    image_urls = data.get("image_urls") or []
     if not prompt:
         return jsonify({"error": "Prompt required"}), 400
 
@@ -544,24 +564,34 @@ def api_generate_image(product_id):
         # Send keepalive while working
         yield " "
 
-        # Build parts: text + optional reference image
-        parts = [{"text": prompt}]
-        if image_url:
+        # Build parts: text + reference image(s)
+        effective_prompt = prompt
+        urls_to_load = image_urls if image_urls else ([image_url] if image_url else [])
+        if len(urls_to_load) > 1:
+            effective_prompt = (
+                "Here are the existing product images for reference. "
+                "Generate a NEW angle that is distinctly different from all of these. "
+                + prompt
+            )
+        parts = [{"text": effective_prompt}]
+        for ref_url in urls_to_load:
+            if not ref_url:
+                continue
             try:
-                print(f"[GenImage] Downloading source image: {image_url[:80]}")
-                img_req = Request(image_url, headers={"User-Agent": "Mozilla/5.0"})
+                print(f"[GenImage] Downloading ref image: {ref_url[:80]}")
+                img_req = Request(ref_url, headers={"User-Agent": "Mozilla/5.0"})
                 img_resp = urlopen(img_req, timeout=15)
                 img_bytes = img_resp.read()
                 img_mime = img_resp.headers.get("Content-Type", "image/jpeg")
-                parts.insert(0, {
+                parts.insert(len(parts) - 1, {
                     "inlineData": {
                         "mimeType": img_mime,
                         "data": base64.b64encode(img_bytes).decode("ascii"),
                     }
                 })
-                print(f"[GenImage] Source image downloaded: {len(img_bytes)} bytes")
+                print(f"[GenImage] Ref image downloaded: {len(img_bytes)} bytes")
             except Exception as ex:
-                print(f"[GenImage] Source image download failed: {ex}")
+                print(f"[GenImage] Ref image download failed: {ex}")
 
         yield " "
 
