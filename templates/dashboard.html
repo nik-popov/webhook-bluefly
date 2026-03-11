@@ -134,6 +134,35 @@
   .badge-gray { background: var(--gray-badge-bg); color: var(--gray-badge); }
   .badge-warning { background: var(--warning-bg); color: var(--warning); }
   .badge-info { background: #eff6ff; color: var(--primary); }
+  .has-tooltip { position: relative; display: inline-block; }
+  .has-tooltip .tooltip-content {
+    visibility: hidden; opacity: 0;
+    position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+    background: #1e293b; color: #f1f5f9; padding: 10px 14px; border-radius: 8px;
+    font-size: 12px; font-weight: 400; text-transform: none; line-height: 1.5;
+    white-space: normal; max-width: 360px; min-width: 180px; width: max-content;
+    z-index: 1000; pointer-events: none; box-shadow: 0 4px 12px rgba(0,0,0,.25);
+    transition: opacity .15s;
+  }
+  .has-tooltip .tooltip-content::after {
+    content: ''; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+    border: 6px solid transparent; border-bottom-color: #1e293b;
+  }
+  .has-tooltip:hover .tooltip-content { visibility: visible; opacity: 1; }
+  .tooltip-error-line { margin-bottom: 6px; }
+  .tooltip-error-line:last-child { margin-bottom: 0; }
+  .tooltip-error-label { color: #fca5a5; font-weight: 600; }
+  .tooltip-hint { color: #fcd34d; font-style: italic; font-size: 11px; display: block; margin-top: 2px; }
+  .sortable-th { cursor: pointer; user-select: none; position: relative; white-space: nowrap; }
+  .sortable-th:hover { background: #f1f5f9; }
+  .sort-arrow { font-size: 10px; margin-left: 3px; color: #94a3b8; }
+  .sort-arrow.asc::after { content: '\25B2'; color: var(--primary); }
+  .sort-arrow.desc::after { content: '\25BC'; color: var(--primary); }
+  .sort-arrow:not(.asc):not(.desc)::after { content: '\21C5'; }
+  .filter-row th { padding: 4px 6px !important; background: #f8fafc; }
+  .col-filter { font-size: 11px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; max-width: 130px; width: 100%; background: #fff; }
+  .fav-btn { cursor: pointer; border: none; background: none; font-size: 16px; padding: 0 2px; vertical-align: middle; line-height: 1; }
+  .fav-btn:hover { transform: scale(1.2); }
   .prod-img { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; background: #f3f4f6; }
   .prod-img-placeholder {
     width: 40px; height: 40px; border-radius: 6px; background: #f3f4f6;
@@ -315,11 +344,31 @@
   </div>
   <div class="table-wrap">
     <table>
-      <thead>
+      <thead id="pub-thead">
         <tr>
           <th><input type="checkbox" id="pub-select-all" onchange="togglePubSelectAll(this.checked)" title="Select all visible rows"></th>
-          <th></th><th>Title</th><th>Vendor</th><th>Category</th><th>Size Field</th>
-          <th>Variants</th><th>Bluefly Price</th><th>Qty</th><th>Push Status</th><th>Size Errors</th><th>Live Status</th><th>Actions</th>
+          <th></th>
+          <th class="sortable-th" onclick="toggleSort('published','title')">Title <span class="sort-arrow" data-col="title"></span></th>
+          <th class="sortable-th" onclick="toggleSort('published','vendor')">Vendor <span class="sort-arrow" data-col="vendor"></span></th>
+          <th class="sortable-th" onclick="toggleSort('published','category')">Category <span class="sort-arrow" data-col="category"></span></th>
+          <th class="sortable-th" onclick="toggleSort('published','size_field')">Size Field <span class="sort-arrow" data-col="size_field"></span></th>
+          <th class="sortable-th" onclick="toggleSort('published','variants')">Variants <span class="sort-arrow" data-col="variants"></span></th>
+          <th class="sortable-th" onclick="toggleSort('published','price')">Bluefly Price <span class="sort-arrow" data-col="price"></span></th>
+          <th class="sortable-th" onclick="toggleSort('published','qty')">Qty <span class="sort-arrow" data-col="qty"></span></th>
+          <th class="sortable-th" onclick="toggleSort('published','status')">Push Status <span class="sort-arrow" data-col="status"></span></th>
+          <th class="sortable-th" onclick="toggleSort('published','size_errors')">Size Errors <span class="sort-arrow" data-col="size_errors"></span></th>
+          <th class="sortable-th" onclick="toggleSort('published','live_status')">Live Status <span class="sort-arrow" data-col="live_status"></span></th>
+          <th>Actions</th>
+        </tr>
+        <tr class="filter-row">
+          <th></th><th></th><th></th>
+          <th><select id="pub-filter-vendor" class="col-filter" onchange="filterPublished()"><option value="">All</option></select></th>
+          <th><select id="pub-filter-category" class="col-filter" onchange="filterPublished()"><option value="">All</option></select></th>
+          <th></th><th></th><th></th><th></th>
+          <th><select id="pub-filter-status" class="col-filter" onchange="filterPublished()"><option value="">All</option></select></th>
+          <th><select id="pub-filter-sizeerr" class="col-filter" onchange="filterPublished()"><option value="">All</option><option value="has">Has errors</option><option value="none">No errors</option></select></th>
+          <th><select id="pub-filter-live" class="col-filter" onchange="filterPublished()"><option value="">All</option></select></th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="published-tbody"></tbody>
@@ -346,6 +395,7 @@
       <option value="no-images">No images</option>
       <option value="bad-image">Bad image format</option>
       <option value="no-qty">Qty = 0</option>
+      <option value="no-brand-id">No brand product ID</option>
     </select>
     <button class="btn btn-success" id="bulk-push-btn" onclick="bulkPush()">Push All Unpushed</button>
     <button class="btn btn-primary" onclick="loadUnpublished(true)">Refresh</button>
@@ -354,11 +404,27 @@
   </div>
   <div class="table-wrap">
     <table>
-      <thead>
+      <thead id="unpub-thead">
         <tr>
           <th><input type="checkbox" id="unpub-select-all" onchange="toggleSelectAll(this.checked)" title="Select all visible eligible rows"></th>
-          <th></th><th>Title</th><th>Vendor</th><th>Category</th><th>Size Field</th>
-          <th>Variants</th><th>Bluefly Price</th><th>Qty</th><th>Eligible</th><th>Actions</th>
+          <th></th>
+          <th class="sortable-th" onclick="toggleSort('unpublished','title')">Title <span class="sort-arrow" data-col="title"></span></th>
+          <th class="sortable-th" onclick="toggleSort('unpublished','vendor')">Vendor <span class="sort-arrow" data-col="vendor"></span></th>
+          <th class="sortable-th" onclick="toggleSort('unpublished','category')">Category <span class="sort-arrow" data-col="category"></span></th>
+          <th class="sortable-th" onclick="toggleSort('unpublished','size_field')">Size Field <span class="sort-arrow" data-col="size_field"></span></th>
+          <th class="sortable-th" onclick="toggleSort('unpublished','variants')">Variants <span class="sort-arrow" data-col="variants"></span></th>
+          <th class="sortable-th" onclick="toggleSort('unpublished','price')">Bluefly Price <span class="sort-arrow" data-col="price"></span></th>
+          <th class="sortable-th" onclick="toggleSort('unpublished','qty')">Qty <span class="sort-arrow" data-col="qty"></span></th>
+          <th class="sortable-th" onclick="toggleSort('unpublished','eligible')">Eligible <span class="sort-arrow" data-col="eligible"></span></th>
+          <th>Actions</th>
+        </tr>
+        <tr class="filter-row">
+          <th></th><th></th><th></th>
+          <th><select id="unpub-filter-vendor" class="col-filter" onchange="filterUnpublished()"><option value="">All</option></select></th>
+          <th><select id="unpub-filter-category" class="col-filter" onchange="filterUnpublished()"><option value="">All</option></select></th>
+          <th></th><th></th><th></th><th></th>
+          <th><select id="unpub-filter-eligible" class="col-filter" onchange="filterUnpublished()"><option value="">All</option><option value="no-category">No category</option><option value="default-variants">Default size only</option><option value="no-images">No images</option><option value="bad-image">Bad image format</option><option value="no-qty">Qty = 0</option><option value="no-brand-id">No brand ID</option></select></th>
+          <th><select id="unpub-filter-action" class="col-filter" onchange="filterUnpublished()"><option value="">All</option><option value="ready">Ready</option><option value="not-ready">Not ready</option></select></th>
         </tr>
       </thead>
       <tbody id="unpublished-tbody"></tbody>
@@ -677,6 +743,9 @@
 </div>
 
 <!-- Fulfill Modal -->
+<div id="img-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:1100;align-items:center;justify-content:center;cursor:zoom-out;" onclick="this.style.display='none'">
+  <img id="img-modal-src" style="max-width:90vw;max-height:90vh;border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,.4);object-fit:contain;" onclick="event.stopPropagation()">
+</div>
 <div id="fulfill-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:1000;align-items:center;justify-content:center;">
   <div style="background:#fff;border-radius:8px;padding:24px;max-width:480px;width:90%;margin:auto;margin-top:15vh;">
     <h3 style="margin-bottom:16px;">Fulfill Order <span id="fulfill-order-id"></span></h3>
@@ -856,10 +925,78 @@ function emptyHTML(cols, msg) {
 }
 
 // -----------------------------------------------------------------------
+// Favorites
+// -----------------------------------------------------------------------
+let _favorites = new Set();
+fetch('/api/favorites').then(r => r.json()).then(arr => { _favorites = new Set(arr.map(String)); }).catch(() => {});
+
+function toggleFavorite(productId, el) {
+  const pid = String(productId);
+  if (_favorites.has(pid)) _favorites.delete(pid);
+  else _favorites.add(pid);
+  el.textContent = _favorites.has(pid) ? '\u2665' : '\u2661';
+  el.style.color = _favorites.has(pid) ? '#ef4444' : '#94a3b8';
+  fetch('/api/favorites', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify([..._favorites]) });
+}
+
+function _pinFavoritesToTop(products) {
+  const favs = products.filter(p => _favorites.has(String(p.id)));
+  const rest = products.filter(p => !_favorites.has(String(p.id)));
+  return favs.concat(rest);
+}
+
+// -----------------------------------------------------------------------
 // Pagination engine
 // -----------------------------------------------------------------------
-const PAGE_SIZE = 25;
+const PAGE_SIZE = 50;
 const _pageState = {};
+const _sortState = { published: { col: null, dir: 'asc' }, unpublished: { col: null, dir: 'asc' } };
+
+function _getSortVal(p, col) {
+  switch (col) {
+    case 'title': return (p.title || '').toLowerCase();
+    case 'vendor': return (p.vendor || '').toLowerCase();
+    case 'category': return (p.bluefly_category || '').toLowerCase();
+    case 'size_field': return (p.size_field || '').toLowerCase();
+    case 'variants': return p.variant_count || 0;
+    case 'price': return p.adjusted_price != null ? parseFloat(p.adjusted_price) : (p.first_price ? parseFloat(p.first_price) : 0);
+    case 'qty': return p.total_quantity || 0;
+    case 'status': return (p.sync_status || '').toLowerCase();
+    case 'size_errors': return (p.size_errors && p.size_errors.length) || 0;
+    case 'live_status': {
+      const c = _findCatalogEntry ? _findCatalogEntry(p) : null;
+      return c ? (c.listing_status || '').toLowerCase() : '';
+    }
+    case 'eligible': return p.push_eligible ? 0 : 1;
+    default: return '';
+  }
+}
+
+function sortProducts(products, col, dir) {
+  if (!col) return products;
+  const mult = dir === 'desc' ? -1 : 1;
+  return [...products].sort((a, b) => {
+    let va = _getSortVal(a, col), vb = _getSortVal(b, col);
+    if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * mult;
+    if (va < vb) return -1 * mult;
+    if (va > vb) return 1 * mult;
+    return 0;
+  });
+}
+
+function toggleSort(table, col) {
+  const s = _sortState[table];
+  if (s.col === col) s.dir = s.dir === 'asc' ? 'desc' : 'asc';
+  else { s.col = col; s.dir = 'asc'; }
+  // Update arrow indicators
+  document.querySelectorAll(`#${table === 'published' ? 'pub' : 'unpub'}-thead .sort-arrow`).forEach(el => {
+    el.className = 'sort-arrow';
+  });
+  const activeArrow = document.querySelector(`#${table === 'published' ? 'pub' : 'unpub'}-thead .sort-arrow[data-col="${col}"]`);
+  if (activeArrow) activeArrow.className = 'sort-arrow ' + s.dir;
+  if (table === 'published') filterPublished();
+  else filterUnpublished();
+}
 
 function paginate(items, tableKey) {
   if (!_pageState[tableKey]) _pageState[tableKey] = { page: 1 };
@@ -1091,6 +1228,7 @@ async function loadPublished(force = true) {
 
     _publishedProducts = _allPublishedProducts.slice();
     _buildCatalogIndex();
+    populateColumnFilters('published');
     _updatePublishedCounts();
     renderPublishedPage(1);
 
@@ -1104,6 +1242,7 @@ async function loadPublished(force = true) {
         document.getElementById('catalog-debug').style.display = 'none';
       }
       _buildCatalogIndex();
+      populateColumnFilters('published');
       _updatePublishedCounts();
       renderPublishedPage(_pageState['published'] ? _pageState['published'].page : 1);
       renderCatalogTable(_shopifySkuSet);
@@ -1150,12 +1289,14 @@ async function loadUnpublished(force = true) {
           if (reason === 'no-images' && p.has_images) return false;
           if (reason === 'bad-image' && !(p.has_images && !p.valid_image_format)) return false;
           if (reason === 'no-qty' && p.has_quantity) return false;
+          if (reason === 'no-brand-id' && p.brand_product_id) return false;
           return true;
         });
         _updateUnpublishedCounts();
+        populateColumnFilters('unpublished');
         if (!batch.done) {
           document.getElementById('unpub-count-label').textContent =
-            _allUnpublishedProducts.length + ' products loaded so far…';
+            _allUnpublishedProducts.length + ' products loaded so far\u2026';
         }
         renderUnpublishedPage(1);
       }
@@ -1177,16 +1318,39 @@ function _matchesSearch(p, q) {
     String(p.id).includes(q);
 }
 
+function _getColFilter(id) {
+  const el = document.getElementById(id);
+  return el ? el.value : '';
+}
+
 function filterPublished() {
   const q = document.getElementById('pub-search').value.toLowerCase();
   const status = document.getElementById('pub-status-filter').value;
+  const fVendor = _getColFilter('pub-filter-vendor');
+  const fCategory = _getColFilter('pub-filter-category');
+  const fStatus = _getColFilter('pub-filter-status');
+  const fSizeErr = _getColFilter('pub-filter-sizeerr');
+  const fLive = _getColFilter('pub-filter-live');
   _publishedProducts = _allPublishedProducts.filter(p => {
     if (q && !_matchesSearch(p, q)) return false;
     if (status === 'size_error' && p.sync_status !== 'size_error' && !(p.size_errors && p.size_errors.length)) return false;
     if (status === 'error' && !p.invalid && p.sync_status !== 'error') return false;
     if (status && status !== 'error' && status !== 'size_error' && p.sync_status !== status) return false;
+    if (fVendor && p.vendor !== fVendor) return false;
+    if (fCategory && (p.bluefly_category || '') !== fCategory) return false;
+    if (fStatus && (p.sync_status || '') !== fStatus) return false;
+    if (fSizeErr === 'has' && !(p.size_errors && p.size_errors.length)) return false;
+    if (fSizeErr === 'none' && (p.size_errors && p.size_errors.length)) return false;
+    if (fLive) {
+      const cat = _findCatalogEntry ? _findCatalogEntry(p) : null;
+      const ls = cat ? (cat.listing_status || '').toLowerCase() : '';
+      if (fLive !== ls) return false;
+    }
     return true;
   });
+  const s = _sortState.published;
+  if (s.col) _publishedProducts = sortProducts(_publishedProducts, s.col, s.dir);
+  _publishedProducts = _pinFavoritesToTop(_publishedProducts);
   _pageState['published'] = { page: 1 };
   _updatePublishedCounts();
   renderPublishedPage(1);
@@ -1195,6 +1359,10 @@ function filterPublished() {
 function filterUnpublished() {
   const q = document.getElementById('unpub-search').value.toLowerCase();
   const reason = document.getElementById('unpub-reason-filter').value;
+  const fVendor = _getColFilter('unpub-filter-vendor');
+  const fCategory = _getColFilter('unpub-filter-category');
+  const fEligible = _getColFilter('unpub-filter-eligible');
+  const fAction = _getColFilter('unpub-filter-action');
   _unpublishedProducts = _allUnpublishedProducts.filter(p => {
     if (q && !_matchesSearch(p, q)) return false;
     if (reason === 'eligible' && !p.push_eligible) return false;
@@ -1203,11 +1371,53 @@ function filterUnpublished() {
     if (reason === 'no-images' && p.has_images) return false;
     if (reason === 'bad-image' && !(p.has_images && !p.valid_image_format)) return false;
     if (reason === 'no-qty' && p.has_quantity) return false;
+    if (reason === 'no-brand-id' && p.brand_product_id) return false;
+    if (fVendor && p.vendor !== fVendor) return false;
+    if (fCategory && (p.bluefly_category || '') !== fCategory) return false;
+    if (fEligible === 'no-category' && p.bluefly_category) return false;
+    if (fEligible === 'default-variants' && !p.has_default_variants) return false;
+    if (fEligible === 'no-images' && p.has_images) return false;
+    if (fEligible === 'bad-image' && !(p.has_images && !p.valid_image_format)) return false;
+    if (fEligible === 'no-qty' && p.has_quantity) return false;
+    if (fEligible === 'no-brand-id' && p.brand_product_id) return false;
+    if (fAction === 'ready' && !p.push_eligible) return false;
+    if (fAction === 'not-ready' && p.push_eligible) return false;
     return true;
   });
+  const s = _sortState.unpublished;
+  if (s.col) _unpublishedProducts = sortProducts(_unpublishedProducts, s.col, s.dir);
+  _unpublishedProducts = _pinFavoritesToTop(_unpublishedProducts);
   _pageState['unpublished'] = { page: 1 };
   _updateUnpublishedCounts();
   renderUnpublishedPage(1);
+}
+
+function _populateSelect(id, values) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const cur = el.value;
+  const opts = '<option value="">All</option>' + values.map(v => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(v)}</option>`).join('');
+  el.innerHTML = opts;
+}
+
+function populateColumnFilters(table) {
+  if (table === 'published') {
+    const products = _allPublishedProducts;
+    _populateSelect('pub-filter-vendor', [...new Set(products.map(p => p.vendor).filter(Boolean))].sort());
+    _populateSelect('pub-filter-category', [...new Set(products.map(p => p.bluefly_category).filter(Boolean))].sort());
+    const statuses = [...new Set(products.map(p => p.sync_status).filter(Boolean))].sort();
+    _populateSelect('pub-filter-status', statuses);
+    // Live status
+    const liveStatuses = [...new Set(products.map(p => {
+      const c = _findCatalogEntry ? _findCatalogEntry(p) : null;
+      return c ? (c.listing_status || '').toLowerCase() : '';
+    }).filter(Boolean))].sort();
+    _populateSelect('pub-filter-live', liveStatuses);
+  } else {
+    const products = _allUnpublishedProducts;
+    _populateSelect('unpub-filter-vendor', [...new Set(products.map(p => p.vendor).filter(Boolean))].sort());
+    _populateSelect('unpub-filter-category', [...new Set(products.map(p => p.bluefly_category).filter(Boolean))].sort());
+  }
 }
 
 function _updatePublishedCounts() {
@@ -1693,7 +1903,7 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
 
     let statusBadge;
     if (p.invalid) statusBadge = '<span class="badge badge-error" title="' + (p.invalid_reason || '') + '">Error</span>';
-    else if (p.sync_status === 'size_error') statusBadge = '<span class="badge badge-error" title="Size mapping errors — fix size field or add conversion">Size Error</span>';
+    else if (p.sync_status === 'size_error') statusBadge = '<span class="has-tooltip"><span class="badge badge-error" style="cursor:help">Size Error</span><span class="tooltip-content">Size mapping errors \u2014 fix size field or add conversion rule</span></span>';
     else if (p.sync_status === 'pushed') statusBadge = '<span class="badge badge-success">Pushed</span>';
     else if (p.sync_status === 'error') statusBadge = '<span class="badge badge-error">Error</span>';
     else if (p.sync_status === 'skipped') statusBadge = '<span class="badge badge-warning">Skipped</span>';
@@ -1746,14 +1956,15 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
       if (p.size_errors && p.size_errors.length) {
         const n = p.size_errors.length;
         const hasSuggestion = p.size_errors.some(e => e.suggestion);
-        const details = p.size_errors.map(e => {
-          let line = `${e.shopify_size} \u2192 ${e.field_name}: ${e.error}`;
-          if (e.suggestion) line += `\n  \u26a0 ${e.suggestion}`;
-          return line;
-        }).join('\n\n');
+        const tooltipLines = p.size_errors.map(e => {
+          let html = `<div class="tooltip-error-line"><span class="tooltip-error-label">${esc(e.shopify_size)}</span> \u2192 ${esc(e.field_name)}: ${esc(e.error)}`;
+          if (e.suggestion) html += `<span class="tooltip-hint">\u26a0 ${esc(e.suggestion)}</span>`;
+          html += '</div>';
+          return html;
+        }).join('');
         const badgeClass = hasSuggestion ? 'badge-error' : 'badge-warning';
         const label = hasSuggestion ? `${n} miscat.` : `${n} variant${n > 1 ? 's' : ''}`;
-        sizeErrCol = `<td><span class="badge ${badgeClass}" title="${esc(details)}" style="cursor:help">${label}</span></td>`;
+        sizeErrCol = `<td><span class="has-tooltip"><span class="badge ${badgeClass}" style="cursor:help">${label}</span><span class="tooltip-content">${tooltipLines}</span></span></td>`;
       } else {
         sizeErrCol = '<td><span style="color:var(--text-muted)">—</span></td>';
       }
@@ -1763,12 +1974,14 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
     const chkCol = isPublished
       ? `<td><input type="checkbox" class="pub-row-chk" data-id="${p.id}" onchange="updatePubSelectedCount()"></td>`
       : '';
+    const isFav = _favorites.has(String(p.id));
+    const favBtn = `<button class="fav-btn" onclick="event.stopPropagation();toggleFavorite(${p.id},this)" style="float:right;color:${isFav ? '#ef4444' : '#94a3b8'}" title="Favorite">${isFav ? '\u2665' : '\u2661'}</button>`;
     return `<tr>
       ${chkCol}<td>${img}</td>
       <td style="white-space:normal;min-width:200px"><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:inherit;"><strong>${esc(p.title)}</strong></a><br><span style="font-size:11px;color:var(--text-muted)">ID: ${p.id}</span></td>
       <td>${esc(p.vendor)}</td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editCategory(${p.id}, '${esc(p.bluefly_category || '')}')">
-        <span class="cat-cell" data-catid="${esc(p.bluefly_category || '')}">${esc(p.bluefly_category || '-')}</span>${p.category_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Category overridden">&#9733;</span>' : ''}
+        <span class="cat-cell" data-catid="${esc(p.bluefly_category || '')}">${esc(p.bluefly_category || '-')}</span>${p.category_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Category overridden">&#9733;</span>' : ''}${favBtn}
       </td>
       <td style="cursor:pointer;text-decoration:underline dotted;font-size:12px;" onclick="editSizeField(${p.id}, '${esc(p.size_field || '')}', '${esc(p.bluefly_category || '')}')">
         ${esc(p.size_field || '-')}${p.size_field_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Size field overridden">&#9733;</span>' : ''}
@@ -1797,7 +2010,7 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
   }
   tbody.innerHTML = products.map(p => {
     const img = p.image_url
-      ? `<img src="${p.image_url}&width=80" class="prod-img" loading="lazy" onerror="this.outerHTML='<div class=prod-img-placeholder>?</div>'">`
+      ? `<img src="${p.image_url}&width=80" class="prod-img" loading="lazy" style="cursor:zoom-in" onclick="openImgModal('${p.image_url}&width=800')" onerror="this.outerHTML='<div class=prod-img-placeholder>?</div>'">`
       : '<div class="prod-img-placeholder">?</div>';
 
     let priceDisplay = '-';
@@ -1829,13 +2042,15 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
     const chk = p.push_eligible
       ? `<input type="checkbox" class="unpub-row-chk" data-id="${p.id}" onchange="updateSelectedCount()">`
       : `<input type="checkbox" disabled title="${esc(issues.join(', '))}">`;
+    const isFav = _favorites.has(String(p.id));
+    const favBtn = `<button class="fav-btn" onclick="event.stopPropagation();toggleFavorite(${p.id},this)" style="float:right;color:${isFav ? '#ef4444' : '#94a3b8'}" title="Favorite">${isFav ? '\u2665' : '\u2661'}</button>`;
     return `<tr>
       <td>${chk}</td>
       <td>${img}</td>
       <td style="white-space:normal;min-width:200px"><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:inherit;"><strong>${esc(p.title)}</strong></a><br><span style="font-size:11px;color:var(--text-muted)">ID: ${p.id}</span></td>
       <td>${esc(p.vendor)}</td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editCategory(${p.id}, '${esc(p.bluefly_category || '')}')">
-        <span class="cat-cell" data-catid="${esc(p.bluefly_category || '')}">${esc(p.bluefly_category || '-')}</span>${p.category_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Category overridden">&#9733;</span>' : ''}
+        <span class="cat-cell" data-catid="${esc(p.bluefly_category || '')}">${esc(p.bluefly_category || '-')}</span>${p.category_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Category overridden">&#9733;</span>' : ''}${favBtn}
       </td>
       <td style="cursor:pointer;text-decoration:underline dotted;font-size:12px;" onclick="editSizeField(${p.id}, '${esc(p.size_field || '')}', '${esc(p.bluefly_category || '')}')">
         ${esc(p.size_field || '-')}${p.size_field_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Size field overridden">&#9733;</span>' : ''}
@@ -1873,6 +2088,7 @@ async function pushSelected() {
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span> Pushing ${ids.length}…`;
   let done = 0;
+  const pushedIds = [];
   for (const productId of ids) {
     try {
       const data = await apiPost('/api/products/push', {product_id: productId});
@@ -1880,6 +2096,7 @@ async function pushSelected() {
         const chk = document.querySelector(`.unpub-row-chk[data-id="${productId}"]`);
         if (chk) chk.closest('tr').style.opacity = '0.4';
         done++;
+        pushedIds.push(productId);
       } else {
         toast(`${productId}: ${data.error || 'failed'}`, 'error');
       }
@@ -1891,7 +2108,14 @@ async function pushSelected() {
   btn.innerHTML = `Push Selected (<span id="selected-count">0</span>)`;
   btn.disabled = true;
   toast(`Pushed ${done} of ${ids.length} products`);
-  loadUnpublished(true); _publishedLoaded = false;
+  for (const id of pushedIds) {
+    const idx = _allUnpublishedProducts.findIndex(p => p.id === id);
+    if (idx >= 0) _allUnpublishedProducts.splice(idx, 1);
+  }
+  _unpublishedProducts = _allUnpublishedProducts.slice();
+  _updateUnpublishedCounts();
+  renderUnpublishedPage(_pageState['unpublished'] ? _pageState['unpublished'].page : 1);
+  _publishedLoaded = false;
 }
 
 let _categoryMap = null;
@@ -2065,9 +2289,32 @@ function editCategory(productId, currentCat) {
         return fetch('/api/category-overrides', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(overrides) });
       }).then(() => {
         overlay.remove();
-        loadProducts(productId, {
-          bluefly_category: catId || currentCat,
-          category_overridden: !!catId,
+        if (!catId) {
+          loadProducts(productId, { bluefly_category: currentCat, category_overridden: false });
+          return;
+        }
+        // Auto-resolve size field for new category
+        const sfLoad = _sizeFieldList ? Promise.resolve(_sizeFieldList) : fetch('/api/size-field-list').then(r => r.json()).then(l => { _sizeFieldList = l; return l; });
+        sfLoad.then(fields => {
+          const valid = fields.filter(sf => sf.target_ids && sf.target_ids.includes(catId));
+          if (valid.length === 1) {
+            // Auto-set the only valid size field
+            fetch('/api/size-field-overrides').then(r => r.json()).then(sfo => {
+              sfo[String(productId)] = valid[0].field_name;
+              return fetch('/api/size-field-overrides', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(sfo) });
+            }).then(() => {
+              toast('Size field auto-set: ' + valid[0].field_name);
+              loadProducts(productId, {
+                bluefly_category: catId, category_overridden: true,
+                size_field: valid[0].field_name, size_field_overridden: true,
+              });
+            });
+          } else if (valid.length > 1) {
+            loadProducts(productId, { bluefly_category: catId, category_overridden: true });
+            editSizeField(productId, '', catId);
+          } else {
+            loadProducts(productId, { bluefly_category: catId, category_overridden: true });
+          }
         });
       });
     }
@@ -2294,6 +2541,7 @@ async function bulkPush() {
   logEl.innerHTML = '';
   fillEl.style.width = '0%';
 
+  const pushedIds = [];
   try {
     const res = await fetch(API_BASE + '/api/products/push-bulk', {
       method: 'POST', cache: 'no-store',
@@ -2322,6 +2570,7 @@ async function bulkPush() {
             fillEl.style.width = pct + '%';
             statusEl.textContent = `Pushing ${msg.index} / ${msg.total}...`;
             logEl.innerHTML += `<div class="log-line log-success">OK ${esc(msg.title)} (${msg.product_id})</div>`;
+            pushedIds.push(msg.product_id);
           } else if (msg.type === 'error') {
             logEl.innerHTML += `<div class="log-line log-error">ERR ${msg.product_id}: ${esc(msg.error)}</div>`;
           } else if (msg.type === 'skip') {
@@ -2340,7 +2589,14 @@ async function bulkPush() {
   }
   btn.disabled = false;
   btn.innerHTML = 'Push All Unpushed';
-  loadUnpublished(true); _publishedLoaded = false;
+  for (const id of pushedIds) {
+    const idx = _allUnpublishedProducts.findIndex(p => p.id === id);
+    if (idx >= 0) _allUnpublishedProducts.splice(idx, 1);
+  }
+  _unpublishedProducts = _allUnpublishedProducts.slice();
+  _updateUnpublishedCounts();
+  renderUnpublishedPage(_pageState['unpublished'] ? _pageState['unpublished'].page : 1);
+  _publishedLoaded = false;
 }
 
 // -----------------------------------------------------------------------
@@ -3013,6 +3269,12 @@ async function acknowledgeOrder(orderId, btn) {
     btn.textContent = 'Ack';
     btn.disabled = false;
   }
+}
+
+function openImgModal(url) {
+  const modal = document.getElementById('img-modal');
+  document.getElementById('img-modal-src').src = url;
+  modal.style.display = 'flex';
 }
 
 function openFulfillModal(orderId) {

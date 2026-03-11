@@ -249,6 +249,7 @@ class BlueflyFieldCatalog:
 
         # 0) Exact match — try original size first (keep IT/UK/EU if valid)
         _has_brand_table = size_scale and size_scale in self._brand_conversions
+        _brand_converted = False  # tracks whether brand table actually matched
         for av in allowed:
             if av.lower() == raw.lower():
                 return {"field_name": field_name, "value": av}
@@ -265,6 +266,7 @@ class BlueflyFieldCatalog:
                 lookup_key = brand_lookup_raw
             converted = brand_table.get(lookup_key)
             if converted:
+                _brand_converted = True
                 us_val = str(converted)
                 src_label = str(lookup_key)
                 # Try exact match of US value against allowed values
@@ -341,7 +343,7 @@ class BlueflyFieldCatalog:
 
         # 4b) EU numeric → SML for clothing (size_s_m_l only)
         #     Skip when a brand table exists — brand table already handled conversion
-        if field_name == "size_s_m_l" and not _has_brand_table:
+        if field_name == "size_s_m_l" and not _brand_converted:
             try:
                 eu_num = int(float(raw))
                 eu_mapped = self._eu_to_sml.get(eu_num)
@@ -410,7 +412,7 @@ class BlueflyFieldCatalog:
 
         # 9) Men's pants EU → US waist: "48" → "32", "50" → "34"
         #    Skip when a brand table exists
-        if field_name == "size_mens_pants" and not _has_brand_table:
+        if field_name == "size_mens_pants" and not _brand_converted:
             try:
                 eu_num = int(float(raw))
                 us_waist = self._eu_mens_pants.get(eu_num)
@@ -435,7 +437,7 @@ class BlueflyFieldCatalog:
 
         # 10) Bra EU → US band conversion: "85B" → "38B"
         #     Skip when a brand table exists
-        if field_name == "size_bras" and not _has_brand_table:
+        if field_name == "size_bras" and not _brand_converted:
             bra_match = re.match(r'^(\d{2,3})([A-G]+)$', raw, re.IGNORECASE)
             if bra_match:
                 eu_band = int(bra_match.group(1))
@@ -453,7 +455,7 @@ class BlueflyFieldCatalog:
 
         # 11) Shoe EU → US conversion: EU 34 → US 2.5
         #     Skip when a brand table exists
-        if field_name == "size_shoes" and not _has_brand_table:
+        if field_name == "size_shoes" and not _brand_converted:
             try:
                 eu_num = float(raw)
                 us_shoe = self._eu_shoes.get(eu_num)

@@ -413,6 +413,13 @@ def _sync_inventory_inner(file_path, record, job_path, product_id, variant_sku, 
             tx_logger.update_status(file_path, "processed")
             return
 
+    # Only update products already published to Bluefly via the dashboard.
+    if not _is_published_to_bluefly(product_id):
+        print(f"[Pipeline/inv] Not yet published to Bluefly — skipping")
+        pipeline.update_stage(job_path, "skipped", {"reason": "not yet published — push manually"})
+        tx_logger.update_status(file_path, "processed")
+        return
+
     pipeline.update_stage(job_path, "mapping")
     sql_field_map = {}
     variants = enriched.get("variants", [])

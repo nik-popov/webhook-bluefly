@@ -1474,6 +1474,25 @@ def api_category_overrides_put():
     return jsonify({"ok": True})
 
 
+@dashboard_bp.route("/api/favorites")
+def api_favorites_get():
+    """Return list of favorited product IDs from config."""
+    cfg = load_config()
+    return jsonify(cfg.get("favorites", []))
+
+
+@dashboard_bp.route("/api/favorites", methods=["PUT"])
+def api_favorites_put():
+    """Save favorited product IDs to config."""
+    data = request.get_json(force=True)
+    if not isinstance(data, list):
+        return jsonify({"error": "Expected a JSON array"}), 400
+    cfg = load_config()
+    cfg["favorites"] = data
+    save_config(cfg)
+    return jsonify({"ok": True})
+
+
 @dashboard_bp.route("/api/category-list")
 def api_category_list():
     """Return category ID → path mapping from Product Categories.xlsx."""

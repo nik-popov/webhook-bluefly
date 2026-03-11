@@ -30,7 +30,21 @@ class ShopifyClient:
         for attempt in range(1, 4):
             try:
                 resp = urlopen(req, timeout=30)
-                return json.loads(resp.read())
+                result = json.loads(resp.read())
+
+                # Proactive throttle management: pause if running low on budget
+                extensions = result.get("extensions", {})
+                cost = extensions.get("cost", {})
+                if cost:
+                    available = cost.get("currentlyAvailable", 1000)
+                    requested = cost.get("requestedQueryCost", 0)
+                    restore = cost.get("restoreRate", 50) or 50
+                    if available < requested * 1.5:
+                        wait = max(1, (requested - available) / restore)
+                        print(f"  Shopify budget low ({available} available), pacing {wait:.1f}s...")
+                        time.sleep(wait)
+
+                return result
             except HTTPError as e:
                 if e.code == 429:
                     retry_after = int(e.headers.get("Retry-After", 2))
@@ -386,6 +400,8 @@ class ShopifyClient:
         """
         all_products = []
         cursor = None
+        page_retries = 0
+        max_page_retries = 3
 
         while True:
             variables = {"query": query_filter}
@@ -393,7 +409,34 @@ class ShopifyClient:
                 variables["cursor"] = cursor
 
             result = self.graphql(query, variables)
+
+            if result.get("errors"):
+                err_codes = [e.get("extensions", {}).get("code", "") for e in result["errors"]]
+                if "THROTTLED" in err_codes:
+                    cost = result.get("extensions", {}).get("cost", {})
+                    restore = cost.get("restoreRate", 50) or 50
+                    requested = cost.get("requestedQueryCost", 0)
+                    available = cost.get("currentlyAvailable", 0)
+                    wait = max(2, (requested - available) / restore)
+                    print(f"  Shopify throttled, waiting {wait:.1f}s...")
+                    time.sleep(wait)
+                    page_retries += 1
+                    if page_retries <= max_page_retries:
+                        continue
+                print(f"  GraphQL errors: {result['errors']}")
+
             data = result.get("data", {}).get("products", {})
+
+            if not data and cursor:
+                page_retries += 1
+                if page_retries <= max_page_retries:
+                    print(f"  Empty products response mid-pagination, retry {page_retries}/{max_page_retries}...")
+                    time.sleep(2)
+                    continue
+                print("  Giving up on page after max retries")
+                break
+
+            page_retries = 0
             edges = data.get("edges", [])
 
             for edge in edges:
@@ -516,6 +559,8 @@ class ShopifyClient:
         }
         """
         cursor = None
+        page_retries = 0
+        max_page_retries = 3
 
         while True:
             variables = {"query": query_filter}
@@ -523,8 +568,48 @@ class ShopifyClient:
                 variables["cursor"] = cursor
 
             result = self.graphql(query, variables)
+
+            # Handle GraphQL-level errors (e.g. THROTTLED)
+            if result.get("errors"):
+                err_codes = [e.get("extensions", {}).get("code", "") for e in result["errors"]]
+                if "THROTTLED" in err_codes:
+                    cost = result.get("extensions", {}).get("cost", {})
+                    restore = cost.get("restoreRate", 50) or 50
+                    requested = cost.get("requestedQueryCost", 0)
+                    available = cost.get("currentlyAvailable", 0)
+                    wait = max(2, (requested - available) / restore)
+                    print(f"  Shopify throttled, waiting {wait:.1f}s...")
+                    time.sleep(wait)
+                    page_retries += 1
+                    if page_retries <= max_page_retries:
+                        continue  # retry same page
+                print(f"  GraphQL errors: {result['errors']}")
+
             data = result.get("data", {}).get("products", {})
+
+            # Empty data mid-pagination — retry
+            if not data and cursor:
+                page_retries += 1
+                if page_retries <= max_page_retries:
+                    print(f"  Empty products response mid-pagination, retry {page_retries}/{max_page_retries}...")
+                    time.sleep(2)
+                    continue
+                print("  Giving up on page after max retries")
+                break
+
             edges = data.get("edges", [])
+
+            # Got 0 edges mid-pagination — likely throttled, retry
+            if not edges and cursor:
+                page_retries += 1
+                if page_retries <= max_page_retries:
+                    print(f"  0 edges mid-pagination (cursor exists), retry {page_retries}/{max_page_retries}...")
+                    time.sleep(3)
+                    continue
+                print("  Giving up on page after max retries (0 edges)")
+                break
+
+            page_retries = 0  # reset on success
             page_products = []
 
             for edge in edges:
