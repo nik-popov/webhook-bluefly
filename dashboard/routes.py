@@ -238,6 +238,24 @@ def _enrich_products(products, synced_products, cfg):
         p["size_field"] = sf["field_name"] if sf else None
         p["size_field_display"] = sf["display_name"] if sf else None
 
+        # Apply title override
+        t_override = cfg.get("title_overrides", {}).get(str(pid))
+        if t_override:
+            p["title"] = t_override
+            p["title_overridden"] = True
+
+        # Apply vendor override
+        v_override = cfg.get("vendor_overrides", {}).get(str(pid))
+        if v_override:
+            p["vendor"] = v_override
+            p["vendor_overridden"] = True
+
+        # Apply price override
+        pr_override = cfg.get("price_overrides", {}).get(str(pid))
+        if pr_override:
+            p["price_overridden"] = True
+            p["price_override"] = pr_override
+
         p["push_eligible"] = True
         if not p.get("bluefly_category"):
             p["push_eligible"] = False
@@ -256,7 +274,15 @@ def _enrich_products(products, synced_products, cfg):
 
         try:
             raw = float(p.get("first_price") or 0)
-            p["adjusted_price"] = round(raw * (1 + adj / 100), 2) if raw else None
+            if pr_override:
+                if pr_override.get("type") == "fixed":
+                    p["adjusted_price"] = round(float(pr_override["value"]), 2)
+                elif pr_override.get("type") == "pct":
+                    p["adjusted_price"] = round(raw * (1 + float(pr_override["value"]) / 100), 2) if raw else None
+                else:
+                    p["adjusted_price"] = round(raw * (1 + adj / 100), 2) if raw else None
+            else:
+                p["adjusted_price"] = round(raw * (1 + adj / 100), 2) if raw else None
         except (ValueError, TypeError):
             p["adjusted_price"] = None
 
@@ -484,6 +510,15 @@ def api_push_product():
         if sf_override:
             _patch_metafield(metafields, "custom", "size_field_override", sf_override)
 
+        # Apply per-product title/vendor/price overrides
+        title_override = cfg.get("title_overrides", {}).get(str(product_id))
+        if title_override:
+            enriched["title"] = title_override
+
+        vendor_override = cfg.get("vendor_overrides", {}).get(str(product_id))
+        if vendor_override:
+            enriched["vendor"] = vendor_override
+
         if not category_id:
             return jsonify({"error": "No bluefly_category metafield"}), 400
 
@@ -528,6 +563,17 @@ def api_push_product():
         cfg = load_config()
         adj = cfg.get("price_adjustment_pct", 0)
         field_defaults = cfg.get("field_defaults", {})
+
+        # Apply per-product price override
+        price_ov = cfg.get("price_overrides", {}).get(str(product_id))
+        if price_ov:
+            if price_ov.get("type") == "fixed":
+                for v in enriched.get("variants", []):
+                    v["price"] = str(price_ov["value"])
+                adj = 0
+            elif price_ov.get("type") == "pct":
+                adj = float(price_ov["value"])
+
         bluefly_payload = build_bluefly_payload(
             enriched, metafields, sql_field_map,
             price_adjustment_pct=adj,
@@ -640,6 +686,9 @@ def api_push_bulk():
         field_defaults = cfg.get("field_defaults", {})
         cat_overrides = cfg.get("category_overrides", {})
         sf_overrides = cfg.get("size_field_overrides", {})
+        title_overrides = cfg.get("title_overrides", {})
+        vendor_overrides = cfg.get("vendor_overrides", {})
+        price_overrides = cfg.get("price_overrides", {})
         success_count = 0
         error_count = 0
 
@@ -663,6 +712,15 @@ def api_push_bulk():
                 sf_override = sf_overrides.get(str(pid))
                 if sf_override:
                     _patch_metafield(metafields, "custom", "size_field_override", sf_override)
+
+                # Apply title/vendor overrides
+                t_ov = title_overrides.get(str(pid))
+                if t_ov:
+                    enriched["title"] = t_ov
+                v_ov = vendor_overrides.get(str(pid))
+                if v_ov:
+                    enriched["vendor"] = v_ov
+
                 if not category_id:
                     yield json.dumps({"type": "skip", "product_id": pid, "reason": "no category"}) + "\n"
                     continue
@@ -686,9 +744,20 @@ def api_push_bulk():
                 except Exception:
                     pass
 
+                # Apply per-product price override
+                prod_adj = adj
+                pr_ov = price_overrides.get(str(pid))
+                if pr_ov:
+                    if pr_ov.get("type") == "fixed":
+                        for v in enriched.get("variants", []):
+                            v["price"] = str(pr_ov["value"])
+                        prod_adj = 0
+                    elif pr_ov.get("type") == "pct":
+                        prod_adj = float(pr_ov["value"])
+
                 payload = build_bluefly_payload(
                     enriched, metafields, sql_field_map,
-                    price_adjustment_pct=adj,
+                    price_adjustment_pct=prod_adj,
                     field_defaults=field_defaults,
                     seller_id=bluefly.seller_id,
                 )
@@ -1248,6 +1317,22 @@ def api_sync_qty_price():
         if sf_override:
             _patch_metafield(metafields, "custom", "size_field_override", sf_override)
 
+        # Apply title/vendor/price overrides
+        title_override = cfg.get("title_overrides", {}).get(str(product_id))
+        if title_override:
+            enriched["title"] = title_override
+        vendor_override = cfg.get("vendor_overrides", {}).get(str(product_id))
+        if vendor_override:
+            enriched["vendor"] = vendor_override
+        price_ov = cfg.get("price_overrides", {}).get(str(product_id))
+        if price_ov:
+            if price_ov.get("type") == "fixed":
+                for v in enriched.get("variants", []):
+                    v["price"] = str(price_ov["value"])
+                adj = 0
+            elif price_ov.get("type") == "pct":
+                adj = float(price_ov["value"])
+
         # Full re-push (PUT) with merged quantities — most reliable way
         # to ensure Bluefly gets correct inventory + price.
         bluefly_payload = build_bluefly_payload(
@@ -1493,6 +1578,23 @@ def api_favorites_put():
     return jsonify({"ok": True})
 
 
+@dashboard_bp.route("/api/vendor-favorites")
+def api_vendor_favorites_get():
+    cfg = load_config()
+    return jsonify(cfg.get("vendor_favorites", []))
+
+
+@dashboard_bp.route("/api/vendor-favorites", methods=["PUT"])
+def api_vendor_favorites_put():
+    data = request.get_json(force=True)
+    if not isinstance(data, list):
+        return jsonify({"error": "Expected a JSON array"}), 400
+    cfg = load_config()
+    cfg["vendor_favorites"] = data
+    save_config(cfg)
+    return jsonify({"ok": True})
+
+
 @dashboard_bp.route("/api/category-list")
 def api_category_list():
     """Return category ID → path mapping from Product Categories.xlsx."""
@@ -1540,6 +1642,69 @@ def api_size_field_list():
     """Return all distinct size field definitions for the picker UI."""
     from field_catalog import get_catalog
     return jsonify(get_catalog().list_size_fields())
+
+
+# -----------------------------------------------------------------------
+# Title Overrides API — per-product title override
+# -----------------------------------------------------------------------
+
+@dashboard_bp.route("/api/title-overrides")
+def api_title_overrides_get():
+    cfg = load_config()
+    return jsonify(cfg.get("title_overrides", {}))
+
+
+@dashboard_bp.route("/api/title-overrides", methods=["PUT"])
+def api_title_overrides_put():
+    data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected a JSON object"}), 400
+    cfg = load_config()
+    cfg["title_overrides"] = data
+    save_config(cfg)
+    return jsonify({"ok": True})
+
+
+# -----------------------------------------------------------------------
+# Vendor Overrides API — per-product vendor override
+# -----------------------------------------------------------------------
+
+@dashboard_bp.route("/api/vendor-overrides")
+def api_vendor_overrides_get():
+    cfg = load_config()
+    return jsonify(cfg.get("vendor_overrides", {}))
+
+
+@dashboard_bp.route("/api/vendor-overrides", methods=["PUT"])
+def api_vendor_overrides_put():
+    data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected a JSON object"}), 400
+    cfg = load_config()
+    cfg["vendor_overrides"] = data
+    save_config(cfg)
+    return jsonify({"ok": True})
+
+
+# -----------------------------------------------------------------------
+# Price Overrides API — per-product price override (fixed $ or %)
+# -----------------------------------------------------------------------
+
+@dashboard_bp.route("/api/price-overrides")
+def api_price_overrides_get():
+    cfg = load_config()
+    return jsonify(cfg.get("price_overrides", {}))
+
+
+@dashboard_bp.route("/api/price-overrides", methods=["PUT"])
+def api_price_overrides_put():
+    data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected a JSON object"}), 400
+    cfg = load_config()
+    cfg["price_overrides"] = data
+    save_config(cfg)
+    return jsonify({"ok": True})
 
 
 # -----------------------------------------------------------------------

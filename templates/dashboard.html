@@ -118,11 +118,11 @@
   }
   table { width: 100%; border-collapse: collapse; }
   th {
-    text-align: left; padding: 12px 16px; font-size: 12px; color: var(--text-muted);
+    text-align: left; padding: 8px 10px; font-size: 11px; color: var(--text-muted);
     text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border);
     background: #f9fafb; white-space: nowrap;
   }
-  td { padding: 10px 16px; font-size: 12px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
+  td { padding: 6px 10px; font-size: 11px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
   tr:last-child td { border-bottom: none; }
   tr:hover { background: #f9fafb; }
   .badge {
@@ -163,10 +163,12 @@
   .col-filter { font-size: 11px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; max-width: 130px; width: 100%; background: #fff; }
   .multi-dropdown { position: relative; display: inline-block; width: 100%; }
   .multi-dropdown-btn { font-size:11px; padding:2px 4px; border:1px solid var(--border); border-radius:4px; max-width:130px; width:100%; background:#fff; cursor:pointer; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.4; }
-  .multi-dropdown-list { display:none; position:absolute; z-index:100; background:#fff; border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.12); padding:4px 0; min-width:150px; max-height:220px; overflow-y:auto; right:0; }
+  .multi-dropdown-list { display:none; position:absolute; z-index:100; background:#fff; border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.12); padding:4px 0; min-width:150px; right:0; }
   .multi-dropdown.open .multi-dropdown-list { display:block; }
   .multi-dropdown-list label { display:block; padding:3px 10px; font-size:11px; cursor:pointer; white-space:nowrap; }
   .multi-dropdown-list label:hover { background:#f3f4f6; }
+  .modal-overlay { position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999; }
+  .modal-box { background:#fff;border-radius:8px;padding:20px;box-shadow:0 8px 32px rgba(0,0,0,.2); }
   .fav-btn { cursor: pointer; border: none; background: none; font-size: 16px; padding: 0 2px; vertical-align: middle; line-height: 1; }
   .fav-btn:hover { transform: scale(1.2); }
   .prod-img { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; background: #f3f4f6; }
@@ -434,6 +436,7 @@
               <label><input type="checkbox" value="has-category" onchange="onEligibleFilterChange()"> Has category</label>
               <label><input type="checkbox" value="default-variants" onchange="onEligibleFilterChange()"> Default size only</label>
               <label><input type="checkbox" value="no-images" onchange="onEligibleFilterChange()"> No images</label>
+              <label><input type="checkbox" value="has-images" onchange="onEligibleFilterChange()"> Has images</label>
               <label><input type="checkbox" value="bad-image" onchange="onEligibleFilterChange()"> Bad image format</label>
               <label><input type="checkbox" value="no-qty" onchange="onEligibleFilterChange()"> Qty = 0</label>
               <label><input type="checkbox" value="has-qty" onchange="onEligibleFilterChange()"> Qty &gt; 0</label>
@@ -947,6 +950,9 @@ function emptyHTML(cols, msg) {
 let _favorites = new Set();
 fetch('/api/favorites').then(r => r.json()).then(arr => { _favorites = new Set(arr.map(String)); }).catch(() => {});
 
+let _vendorFavorites = new Set();
+fetch('/api/vendor-favorites').then(r => r.json()).then(arr => { _vendorFavorites = new Set(arr.map(String)); }).catch(() => {});
+
 function toggleFavorite(productId, el) {
   const pid = String(productId);
   if (_favorites.has(pid)) _favorites.delete(pid);
@@ -956,9 +962,18 @@ function toggleFavorite(productId, el) {
   fetch('/api/favorites', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify([..._favorites]) });
 }
 
+function toggleVendorFavorite(vendor, el) {
+  const v = String(vendor);
+  if (_vendorFavorites.has(v)) _vendorFavorites.delete(v);
+  else _vendorFavorites.add(v);
+  el.textContent = _vendorFavorites.has(v) ? '\u2665' : '\u2661';
+  el.style.color = _vendorFavorites.has(v) ? '#ef4444' : '#94a3b8';
+  fetch('/api/vendor-favorites', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify([..._vendorFavorites]) });
+}
+
 function _pinFavoritesToTop(products) {
-  const favs = products.filter(p => _favorites.has(String(p.id)));
-  const rest = products.filter(p => !_favorites.has(String(p.id)));
+  const favs = products.filter(p => _favorites.has(String(p.id)) || _vendorFavorites.has(String(p.vendor)));
+  const rest = products.filter(p => !_favorites.has(String(p.id)) && !_vendorFavorites.has(String(p.vendor)));
   return favs.concat(rest);
 }
 
@@ -1396,6 +1411,7 @@ function filterUnpublished() {
       if (f === 'has-category' && !p.bluefly_category) return false;
       if (f === 'default-variants' && !p.has_default_variants) return false;
       if (f === 'no-images' && p.has_images) return false;
+      if (f === 'has-images' && !p.has_images) return false;
       if (f === 'bad-image' && !(p.has_images && !p.valid_image_format)) return false;
       if (f === 'no-qty' && p.has_quantity) return false;
       if (f === 'has-qty' && !p.has_quantity) return false;
@@ -2010,11 +2026,17 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
       ? `<td><input type="checkbox" class="pub-row-chk" data-id="${p.id}" onchange="updatePubSelectedCount()"></td>`
       : '';
     const isFav = _favorites.has(String(p.id));
-    const favBtn = `<button class="fav-btn" onclick="event.stopPropagation();toggleFavorite(${p.id},this)" style="float:right;color:${isFav ? '#ef4444' : '#94a3b8'}" title="Favorite">${isFav ? '\u2665' : '\u2661'}</button>`;
+    const favBtn = `<button class="fav-btn" onclick="event.stopPropagation();toggleFavorite(${p.id},this)" style="float:right;color:${isFav ? '#ef4444' : '#94a3b8'}" title="Favorite product">${isFav ? '\u2665' : '\u2661'}</button>`;
+    const isVendorFav = _vendorFavorites.has(String(p.vendor));
+    const vendorFavBtn = `<button class="fav-btn" onclick="event.stopPropagation();toggleVendorFavorite('${esc(p.vendor)}',this)" style="float:right;color:${isVendorFav ? '#ef4444' : '#94a3b8'}" title="Favorite vendor">${isVendorFav ? '\u2665' : '\u2661'}</button>`;
+    const titleStar = p.title_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Title overridden">&#9733;</span>' : '';
+    const vendorStar = p.vendor_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Vendor overridden">&#9733;</span>' : '';
+    const priceStar = p.price_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Price overridden">&#9733;</span>' : '';
+
     return `<tr>
       ${chkCol}<td>${img}</td>
-      <td style="white-space:normal;min-width:200px"><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:inherit;"><strong>${esc(p.title)}</strong></a><br><span style="font-size:11px;color:var(--text-muted)">ID: ${p.id}</span></td>
-      <td>${esc(p.vendor)}</td>
+      <td style="white-space:normal;min-width:200px"><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:inherit;"><strong>${esc(p.title)}</strong></a>${titleStar}<br><span style="font-size:11px;color:var(--text-muted);cursor:pointer;text-decoration:underline dotted;" onclick="editTitle(${p.id}, this)">ID: ${p.id}</span></td>
+      <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editVendor(${p.id}, this)">${esc(p.vendor)}${vendorStar}${vendorFavBtn}</td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editCategory(${p.id}, '${esc(p.bluefly_category || '')}')">
         <span class="cat-cell" data-catid="${esc(p.bluefly_category || '')}">${esc(p.bluefly_category || '-')}</span>${p.category_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Category overridden">&#9733;</span>' : ''}${favBtn}
       </td>
@@ -2022,7 +2044,7 @@ function renderProductTable(tbodyId, products, isPublished, emptyMsg) {
         ${esc(p.size_field || '-')}${p.size_field_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Size field overridden">&#9733;</span>' : ''}
       </td>
       <td>${p.variant_count}</td>
-      <td>${priceDisplay}</td>
+      <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editPrice(${p.id}, this)">${priceDisplay}${priceStar}</td>
       <td>${p.total_quantity}</td>
       <td>${statusBadge}</td>
       ${sizeErrCol}
@@ -2078,12 +2100,18 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
       ? `<input type="checkbox" class="unpub-row-chk" data-id="${p.id}" onchange="updateSelectedCount()">`
       : `<input type="checkbox" disabled title="${esc(issues.join(', '))}">`;
     const isFav = _favorites.has(String(p.id));
-    const favBtn = `<button class="fav-btn" onclick="event.stopPropagation();toggleFavorite(${p.id},this)" style="float:right;color:${isFav ? '#ef4444' : '#94a3b8'}" title="Favorite">${isFav ? '\u2665' : '\u2661'}</button>`;
+    const favBtn = `<button class="fav-btn" onclick="event.stopPropagation();toggleFavorite(${p.id},this)" style="float:right;color:${isFav ? '#ef4444' : '#94a3b8'}" title="Favorite product">${isFav ? '\u2665' : '\u2661'}</button>`;
+    const isVendorFav = _vendorFavorites.has(String(p.vendor));
+    const vendorFavBtn = `<button class="fav-btn" onclick="event.stopPropagation();toggleVendorFavorite('${esc(p.vendor)}',this)" style="float:right;color:${isVendorFav ? '#ef4444' : '#94a3b8'}" title="Favorite vendor">${isVendorFav ? '\u2665' : '\u2661'}</button>`;
+    const titleStar = p.title_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Title overridden">&#9733;</span>' : '';
+    const vendorStar = p.vendor_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Vendor overridden">&#9733;</span>' : '';
+    const priceStar = p.price_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Price overridden">&#9733;</span>' : '';
+
     return `<tr>
       <td>${chk}</td>
       <td>${img}</td>
-      <td style="white-space:normal;min-width:200px"><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:inherit;"><strong>${esc(p.title)}</strong></a><br><span style="font-size:11px;color:var(--text-muted)">ID: ${p.id}</span></td>
-      <td>${esc(p.vendor)}</td>
+      <td style="white-space:normal;min-width:200px"><a href="https://${_shopifyStore}/admin/products/${p.id}" target="_blank" style="text-decoration:none;color:inherit;"><strong>${esc(p.title)}</strong></a>${titleStar}<br><span style="font-size:11px;color:var(--text-muted);cursor:pointer;text-decoration:underline dotted;" onclick="editTitle(${p.id}, this)">ID: ${p.id}</span></td>
+      <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editVendor(${p.id}, this)">${esc(p.vendor)}${vendorStar}${vendorFavBtn}</td>
       <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editCategory(${p.id}, '${esc(p.bluefly_category || '')}')">
         <span class="cat-cell" data-catid="${esc(p.bluefly_category || '')}">${esc(p.bluefly_category || '-')}</span>${p.category_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Category overridden">&#9733;</span>' : ''}${favBtn}
       </td>
@@ -2091,7 +2119,7 @@ function renderUnpublishedTable(tbodyId, products, emptyMsg) {
         ${esc(p.size_field || '-')}${p.size_field_overridden ? ' <span style="color:var(--accent);font-size:10px;" title="Size field overridden">&#9733;</span>' : ''}
       </td>
       <td>${p.variant_count}</td>
-      <td>${priceDisplay}</td>
+      <td style="cursor:pointer;text-decoration:underline dotted;" onclick="editPrice(${p.id}, this)">${priceDisplay}${priceStar}</td>
       <td>${p.total_quantity}</td>
       <td>${eligBadge}</td>
       <td style="white-space:nowrap;">${pushBtn}</td>
@@ -2255,6 +2283,176 @@ function editSizeField(productId, currentField, categoryId) {
       if (item) saveOverride(item.dataset.field);
     });
     document.getElementById('sf-remove-btn').addEventListener('click', () => saveOverride(null));
+  });
+}
+
+// ---- Title override editor ----
+function editTitle(productId, cellEl) {
+  const product = [..._allUnpublishedProducts, ..._allPublishedProducts].find(p => p.id === productId);
+  const current = product ? product.title : '';
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:700px;width:90%;">
+      <h4 style="margin-bottom:12px;">Override Title</h4>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Product ID: ${productId}</p>
+      <input type="text" id="title-override-input" value="${esc(current)}" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;margin-bottom:12px;">
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-primary" id="title-save-btn">Save</button>
+        <button class="btn btn-danger" id="title-remove-btn">Remove Override</button>
+        <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  const input = document.getElementById('title-override-input');
+  input.focus();
+  input.select();
+
+  document.getElementById('title-save-btn').addEventListener('click', () => {
+    const val = input.value.trim();
+    if (!val) return;
+    fetch('/api/title-overrides').then(r => r.json()).then(overrides => {
+      overrides[String(productId)] = val;
+      return fetch('/api/title-overrides', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(overrides) });
+    }).then(() => {
+      overlay.remove();
+      toast('Title override saved');
+      loadProducts(productId, { title: val, title_overridden: true });
+    });
+  });
+
+  document.getElementById('title-remove-btn').addEventListener('click', () => {
+    fetch('/api/title-overrides').then(r => r.json()).then(overrides => {
+      delete overrides[String(productId)];
+      return fetch('/api/title-overrides', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(overrides) });
+    }).then(() => {
+      overlay.remove();
+      toast('Title override removed');
+      // Force reload to get original Shopify title
+      _unpublishedLoaded = false;
+      _publishedLoaded = false;
+      const pubTab = document.getElementById('tab-published');
+      if (pubTab && pubTab.classList.contains('active')) loadPublished(true);
+      else loadUnpublished(true);
+    });
+  });
+}
+
+// ---- Vendor override editor ----
+function editVendor(productId, cellEl) {
+  const product = [..._allUnpublishedProducts, ..._allPublishedProducts].find(p => p.id === productId);
+  const current = product ? product.vendor : '';
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:400px;">
+      <h4 style="margin-bottom:12px;">Override Vendor</h4>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Product ID: ${productId}</p>
+      <input type="text" id="vendor-override-input" value="${esc(current)}" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;margin-bottom:12px;">
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-primary" id="vendor-save-btn">Save</button>
+        <button class="btn btn-danger" id="vendor-remove-btn">Remove Override</button>
+        <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  const input = document.getElementById('vendor-override-input');
+  input.focus();
+  input.select();
+
+  document.getElementById('vendor-save-btn').addEventListener('click', () => {
+    const val = input.value.trim();
+    if (!val) return;
+    fetch('/api/vendor-overrides').then(r => r.json()).then(overrides => {
+      overrides[String(productId)] = val;
+      return fetch('/api/vendor-overrides', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(overrides) });
+    }).then(() => {
+      overlay.remove();
+      toast('Vendor override saved');
+      loadProducts(productId, { vendor: val, vendor_overridden: true });
+    });
+  });
+
+  document.getElementById('vendor-remove-btn').addEventListener('click', () => {
+    fetch('/api/vendor-overrides').then(r => r.json()).then(overrides => {
+      delete overrides[String(productId)];
+      return fetch('/api/vendor-overrides', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(overrides) });
+    }).then(() => {
+      overlay.remove();
+      toast('Vendor override removed');
+      _unpublishedLoaded = false;
+      _publishedLoaded = false;
+      const pubTab = document.getElementById('tab-published');
+      if (pubTab && pubTab.classList.contains('active')) loadPublished(true);
+      else loadUnpublished(true);
+    });
+  });
+}
+
+// ---- Price override editor ----
+function editPrice(productId, cellEl) {
+  const product = [..._allUnpublishedProducts, ..._allPublishedProducts].find(p => p.id === productId);
+  const rawPrice = product ? (product.first_price || '') : '';
+  const existing = product ? product.price_override : null;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:400px;">
+      <h4 style="margin-bottom:12px;">Override Price</h4>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Product ID: ${productId} &middot; Shopify price: $${rawPrice ? parseFloat(rawPrice).toFixed(2) : '—'}</p>
+      <div style="margin-bottom:10px;">
+        <label style="display:block;margin-bottom:4px;font-size:12px;">
+          <input type="radio" name="price-type" value="fixed" ${existing && existing.type === 'pct' ? '' : 'checked'}> Fixed dollar amount
+        </label>
+        <label style="display:block;margin-bottom:4px;font-size:12px;">
+          <input type="radio" name="price-type" value="pct" ${existing && existing.type === 'pct' ? 'checked' : ''}> Markup percentage
+        </label>
+      </div>
+      <input type="number" id="price-override-input" step="0.01" value="${existing ? existing.value : ''}" placeholder="${existing && existing.type === 'pct' ? 'e.g. 30' : 'e.g. 299.99'}" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;margin-bottom:12px;">
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-primary" id="price-save-btn">Save</button>
+        <button class="btn btn-danger" id="price-remove-btn">Remove Override</button>
+        <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById('price-override-input').focus();
+
+  document.getElementById('price-save-btn').addEventListener('click', () => {
+    const val = parseFloat(document.getElementById('price-override-input').value);
+    if (isNaN(val)) { toast('Enter a valid number', 'error'); return; }
+    const type = document.querySelector('input[name="price-type"]:checked').value;
+    fetch('/api/price-overrides').then(r => r.json()).then(overrides => {
+      overrides[String(productId)] = { type, value: val };
+      return fetch('/api/price-overrides', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(overrides) });
+    }).then(() => {
+      overlay.remove();
+      toast('Price override saved');
+      let adjPrice;
+      if (type === 'fixed') {
+        adjPrice = Math.round(val * 100) / 100;
+      } else {
+        const raw = parseFloat(rawPrice) || 0;
+        adjPrice = raw ? Math.round(raw * (1 + val / 100) * 100) / 100 : null;
+      }
+      loadProducts(productId, { adjusted_price: adjPrice, price_overridden: true, price_override: { type, value: val } });
+    });
+  });
+
+  document.getElementById('price-remove-btn').addEventListener('click', () => {
+    fetch('/api/price-overrides').then(r => r.json()).then(overrides => {
+      delete overrides[String(productId)];
+      return fetch('/api/price-overrides', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(overrides) });
+    }).then(() => {
+      overlay.remove();
+      toast('Price override removed');
+      const raw = parseFloat(rawPrice) || 0;
+      const adjPrice = raw ? Math.round(raw * (1 + _priceAdj / 100) * 100) / 100 : null;
+      loadProducts(productId, { adjusted_price: adjPrice, price_overridden: false, price_override: null });
+    });
   });
 }
 
